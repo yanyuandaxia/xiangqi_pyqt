@@ -23,6 +23,7 @@ from chess_logic import ChessBoard, Side, STARTING_FEN, Piece, PieceType
 from board_widget import BoardWidget
 from move_history import MoveHistoryWidget
 from uci_engine import UCIEngine, EngineInfo
+from resource_path import get_settings_path, get_resource_path, get_user_data_path, get_engine_path, get_default_engine_path
 
 
 class PlayerType(Enum):
@@ -244,34 +245,27 @@ class BoardEditorDialog(QDialog):
         self.board_widget.update()
     
     def _import_fen(self):
-        """Import position from FEN file"""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "导入局面", "", "FEN Files (*.fen);;All Files (*)"
+        """Import position from FEN string via dialog"""
+        text, ok = QInputDialog.getText(
+            self, "导入局面", "请输入FEN字符串:",
+            text="rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1"
         )
         
-        if file_path:
-            try:
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    text = f.read().strip()
-                
-                # Load FEN
-                if self.board_widget.board.load_fen(text):
-                    # Clear redo stack
-                    self.redo_stack.clear()
-                    
-                    # Update side to move radio buttons
-                    if self.board_widget.board.current_side == Side.RED:
-                        self.red_first.setChecked(True)
-                    else:
-                        self.black_first.setChecked(True)
-                    self.board_widget.update()
+        if ok and text.strip():
+            fen = text.strip()
+            # Load FEN
+            if self.board_widget.board.load_fen(fen):
+                # Update side to move radio buttons
+                if self.board_widget.board.current_side == Side.RED:
+                    self.red_first.setChecked(True)
                 else:
-                    QMessageBox.warning(self, "错误", "无效的FEN文件内容")
-            except Exception as e:
-                QMessageBox.warning(self, "错误", f"导入失败: {str(e)}")
+                    self.black_first.setChecked(True)
+                self.board_widget.update()
+            else:
+                QMessageBox.warning(self, "错误", "无效的FEN字符串")
 
     def _export_fen(self):
-        """Export current position to FEN file"""
+        """Export current position to FEN string via dialog"""
         # Set current side based on radio buttons first
         orig_side = self.board_widget.board.current_side
         if self.red_first.isChecked():
@@ -284,21 +278,38 @@ class BoardEditorDialog(QDialog):
         # Restore side
         self.board_widget.board.current_side = orig_side
         
-        file_path, _ = QFileDialog.getSaveFileName(
-            self, "导出局面", "", "FEN Files (*.fen);;All Files (*)"
-        )
+        # Show dialog with FEN string that can be copied
+        dialog = QDialog(self)
+        dialog.setWindowTitle("导出局面")
+        dialog.setMinimumWidth(500)
         
-        if file_path:
-            # Ensure extension
-            if not file_path.endswith('.fen'):
-                file_path += '.fen'
-                
-            try:
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    f.write(fen)
-                QMessageBox.information(self, "成功", "局面已导出")
-            except Exception as e:
-                QMessageBox.warning(self, "错误", f"导出失败: {str(e)}")
+        layout = QVBoxLayout(dialog)
+        
+        label = QLabel("当前局面的FEN字符串（可复制）:")
+        layout.addWidget(label)
+        
+        from PyQt5.QtWidgets import QLineEdit
+        fen_edit = QLineEdit()
+        fen_edit.setText(fen)
+        fen_edit.setReadOnly(True)
+        fen_edit.selectAll()
+        layout.addWidget(fen_edit)
+        
+        # Copy button
+        copy_btn = QPushButton("复制到剪贴板")
+        def copy_fen():
+            from PyQt5.QtWidgets import QApplication
+            QApplication.clipboard().setText(fen)
+            QMessageBox.information(dialog, "成功", "FEN已复制到剪贴板")
+        copy_btn.clicked.connect(copy_fen)
+        layout.addWidget(copy_btn)
+        
+        # Close button
+        close_btn = QPushButton("关闭")
+        close_btn.clicked.connect(dialog.accept)
+        layout.addWidget(close_btn)
+        
+        dialog.exec_()
     
     def _confirm(self):
         """Confirm the edited position"""
@@ -308,6 +319,13 @@ class BoardEditorDialog(QDialog):
         else:
             self.board_widget.board.current_side = Side.BLACK
         
+        # Check if red is on top (non-standard position)
+        # If so, flip the board to normalize it
+        red_king = self.board_widget.board._find_king(Side.RED)
+        if red_king and red_king[1] >= 5:
+            # Red king is in upper half - flip the board to normalize
+            self._flip_board_position()
+        
         # Clear history since this is a new position
         self.board_widget.board.move_history = []
         self.board_widget.board.position_history = []
@@ -316,6 +334,21 @@ class BoardEditorDialog(QDialog):
         self.board_widget.board.fullmove_number = 1
         
         self.accept()
+    
+    def _flip_board_position(self):
+        """Flip the board position vertically to normalize red to bottom"""
+        board = self.board_widget.board
+        new_board = [[None] * 9 for _ in range(10)]
+        
+        for rank in range(10):
+            for file in range(9):
+                piece = board.board[rank][file]
+                if piece:
+                    # Flip rank: 0->9, 1->8, ..., 9->0
+                    new_rank = 9 - rank
+                    new_board[new_rank][file] = piece
+        
+        board.board = new_board
 
 
 class MainWindow(QMainWindow):
@@ -347,9 +380,12 @@ class MainWindow(QMainWindow):
         self.showing_hint_result = False
         self.hint_info_text = ""  # 保存提示结果的文本
         
+        # Edited position flag (allows engine analysis even if game appears over)
+        self.edited_position = False
+
         # Redo stack (list of UCI move strings)
         self.redo_stack = []
-        
+
         self._setup_ui()
         # self._setup_menu()  # Menu bar disabled
         self._setup_toolbar()
@@ -582,6 +618,7 @@ class MainWindow(QMainWindow):
         self.move_history.clear()
         self.redo_stack.clear() # Clear redo stack
         self.board_widget.hint_move = None
+        self.edited_position = False  # Reset edited position flag
         
         if self.engine.is_ready:
             self.engine.new_game()
@@ -767,6 +804,14 @@ class MainWindow(QMainWindow):
             self.move_history.clear()
             self.redo_stack.clear() # Clear redo stack
             
+            # Mark as edited position to allow engine analysis
+            self.edited_position = True
+            
+            # Board position has been normalized (red at bottom) in _confirm
+            # Reset view to normal orientation
+            self.board_widget.flipped = False
+            self.board_widget.update()
+            
             if self.engine.is_ready:
                 self.engine.new_game()
             
@@ -903,8 +948,9 @@ class MainWindow(QMainWindow):
     def load_settings(self):
         """Load settings from JSON file"""
         try:
-            if os.path.exists('settings.json'):
-                with open('settings.json', 'r', encoding='utf-8') as f:
+            settings_path = get_settings_path()
+            if os.path.exists(settings_path):
+                with open(settings_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                 
                 # Convert string back to Enum (value is the Chinese string)
@@ -914,10 +960,16 @@ class MainWindow(QMainWindow):
                     data['black_player'] = PlayerType(data['black_player'])
                 
                 self.settings.update(data)
-                
-                # Auto start engine if path is set
-                if self.settings['engine_path']:
-                    self._start_engine(self.settings['engine_path'])
+            
+            # 如果没有设置引擎路径，使用默认引擎
+            if not self.settings['engine_path']:
+                default_engine = get_default_engine_path()
+                if default_engine:
+                    self.settings['engine_path'] = default_engine
+            
+            # Auto start engine if path is set
+            if self.settings['engine_path']:
+                self._start_engine(self.settings['engine_path'])
         except Exception as e:
             print(f"Error loading settings: {e}")
 
@@ -929,7 +981,8 @@ class MainWindow(QMainWindow):
             data['red_player'] = data['red_player'].value
             data['black_player'] = data['black_player'].value
             
-            with open('settings.json', 'w', encoding='utf-8') as f:
+            settings_path = get_settings_path()
+            with open(settings_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=4)
         except Exception as e:
             QMessageBox.warning(self, "错误", f"保存设置失败: {str(e)}")
@@ -938,10 +991,13 @@ class MainWindow(QMainWindow):
         """Start the chess engine"""
         self.engine.stop()
         
-        if self.engine.start(path):
+        # 转换引擎路径（处理打包后的相对路径）
+        actual_path = get_engine_path(path)
+        
+        if self.engine.start(actual_path):
             self.engine_info_label.setText("引擎: 正在初始化...")
         else:
-            QMessageBox.warning(self, "错误", f"无法启动引擎:\n{path}")
+            QMessageBox.warning(self, "错误", f"无法启动引擎:\n{actual_path}")
             self.engine_info_label.setText("引擎: 启动失败")
     
     def _on_engine_ready(self):
@@ -956,6 +1012,7 @@ class MainWindow(QMainWindow):
     def _on_player_move(self, move: str):
         """Called when player makes a move"""
         self.redo_stack.clear() # Clear redo stack
+        self.edited_position = False  # Reset edited position flag after a move
         
         # Clear hint when player makes a move
         self.board_widget.hint_move = None
@@ -1007,7 +1064,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "提示", "引擎正在思考中...")
             return
         
-        if self._is_game_over():
+        if self._is_game_over() and not self.edited_position:
             QMessageBox.information(self, "提示", "游戏已结束")
             return
         
@@ -1053,6 +1110,7 @@ class MainWindow(QMainWindow):
         # Normal mode: execute the move
         if self.board.make_move(move):
             self.redo_stack.clear() # Clear redo stack
+            self.edited_position = False  # Reset edited position flag after engine move
             self.board_widget.set_board(self.board)
             self.board_widget.set_last_move(move)
             

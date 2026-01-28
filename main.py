@@ -5,10 +5,13 @@ Main entry point
 """
 
 import sys
+import os
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QIcon
 
 from main_window import MainWindow
+from resource_path import get_resource_path
 
 
 def main():
@@ -19,6 +22,11 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("中国象棋")
     app.setStyle("Fusion")
+    
+    # 设置应用图标
+    icon_path = get_resource_path('xiangqi_pyqt.png')
+    if os.path.exists(icon_path):
+        app.setWindowIcon(QIcon(icon_path))
     
     # Set stylesheet for better appearance
     app.setStyleSheet("""

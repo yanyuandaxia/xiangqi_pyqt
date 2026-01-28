@@ -431,6 +431,18 @@ class ChessBoard:
                     return (file, rank)
         return None
     
+    def _is_red_on_top(self) -> bool:
+        """Check if red side is on top of the board (rank 5-9)
+        
+        This is used to determine pawn direction and other side-specific rules.
+        Returns True if red king is in upper half, False otherwise.
+        """
+        red_king = self._find_king(Side.RED)
+        if red_king:
+            return red_king[1] >= 5
+        # Default: red at bottom
+        return False
+    
     def _kings_face_each_other(self) -> bool:
         """Check if kings face each other (flying general rule)"""
         red_king = self._find_king(Side.RED)
@@ -444,10 +456,11 @@ class ChessBoard:
         
         # Check if path between kings is clear
         file = red_king[0]
-        start_rank = red_king[1] + 1
-        end_rank = black_king[1]
+        # Ensure we iterate from lower rank to higher rank
+        min_rank = min(red_king[1], black_king[1])
+        max_rank = max(red_king[1], black_king[1])
         
-        for rank in range(start_rank, end_rank):
+        for rank in range(min_rank + 1, max_rank):
             if self.get_piece(file, rank) is not None:
                 return False
         

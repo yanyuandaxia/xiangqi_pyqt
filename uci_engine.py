@@ -7,10 +7,12 @@ Handles communication with UCI-compatible engines like Pikafish
 import subprocess
 import threading
 import queue
+import os
 from typing import Optional, Callable
 from dataclasses import dataclass
 
 from PyQt5.QtCore import QObject, pyqtSignal
+from resource_path import get_base_path
 
 
 @dataclass
@@ -77,13 +79,17 @@ class UCIEngine(QObject):
         self.engine_path = engine_path
         
         try:
+            # 设置工作目录为资源基础目录，以便引擎找到 NNUE 文件
+            working_dir = get_base_path()
+            
             self.process = subprocess.Popen(
                 [engine_path],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                bufsize=1
+                bufsize=1,
+                cwd=working_dir
             )
         except (FileNotFoundError, PermissionError) as e:
             print(f"Failed to start engine: {e}")
