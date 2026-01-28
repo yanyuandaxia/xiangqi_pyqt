@@ -1,0 +1,6 @@
+{
+    "red_player": "玩家",
+    "black_player": "玩家",
+    "engine_path": "./Linux/pikafish-avx2",
+    "think_time": 2000
+}
