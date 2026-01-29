@@ -273,7 +273,11 @@ class ChessBoard:
         return '|'.join(key_parts)
     
     def _is_perpetual_check(self, test_board: 'ChessBoard', checking_side: Side) -> bool:
-        """Check if this would be perpetual check (same checking position 3+ times already)
+        """Check if this would be perpetual check (same checking position occurred 2+ times already)
+        
+        According to Xiangqi rules, perpetual check (长将) is forbidden. 
+        If the same position with check occurs 3 times, the checking side loses.
+        So we forbid the move that would create the 3rd occurrence.
         
         Args:
             test_board: The board state after the move
@@ -290,7 +294,7 @@ class ChessBoard:
                 # The checking side alternates, so we check based on move index parity
                 # Even index = Red just moved (Black in check), Odd index = Black just moved (Red in check)
                 if checking_side == Side.RED:
-                    # Red is checking, so this should be odd-indexed moves (0-indexed, so even = Red moved)
+                    # Red is checking, so this should be when Red just moved (even index in 0-based)
                     if i % 2 == 0:  # Red just moved
                         check_count += 1
                 else:
@@ -298,8 +302,8 @@ class ChessBoard:
                     if i % 2 == 1:  # Black just moved
                         check_count += 1
         
-        # If already occurred 3 times with check from this side, this would be the 4th - not allowed
-        return check_count >= 3
+        # If already occurred 2 times with check from this side, this would be the 3rd - forbidden
+        return check_count >= 2
     
     def _is_valid_piece_move(self, piece: Piece, ff: int, fr: int, tf: int, tr: int) -> bool:
         """Check if piece movement follows the rules"""

@@ -24,6 +24,8 @@ class EngineInfo:
     nodes: int = 0
     nps: int = 0
     time: int = 0
+    # WDL (Win/Draw/Loss) in per mille (0-1000 each)
+    wdl: tuple = (0, 1000, 0)  # Default to draw (0% win, 100% draw, 0% loss)
 
 
 class UCIEngine(QObject):
@@ -52,6 +54,10 @@ class UCIEngine(QObject):
         self.on_bestmove: Optional[Callable[[str], None]] = None
         self.on_info: Optional[Callable[[EngineInfo], None]] = None
         self.on_ready: Optional[Callable[[], None]] = None
+        
+        # Store candidate moves from search (first move of each PV line at max depth)
+        self._candidate_moves: list[str] = []
+        self._current_depth: int = 0
         
         # Connect signals to internal dispatch methods
         self.bestmove_signal.connect(self._dispatch_bestmove)
@@ -148,6 +154,8 @@ class UCIEngine(QObject):
             return
         
         if tokens[0] == "uciok":
+            # Enable WDL output for win rate display
+            self._send_command("setoption name UCI_ShowWDL value true")
             self._send_command("isready")
         
         elif tokens[0] == "readyok":
@@ -163,6 +171,21 @@ class UCIEngine(QObject):
         
         elif tokens[0] == "info":
             info = self._parse_info(tokens[1:])
+            
+            # Collect candidate moves from PV lines
+            if info.pv and info.depth > 0:
+                pv_moves = info.pv.split()
+                if pv_moves:
+                    first_move = pv_moves[0]
+                    # If depth increased, start fresh candidate list
+                    if info.depth > self._current_depth:
+                        self._current_depth = info.depth
+                        self._candidate_moves = [first_move]
+                    elif info.depth == self._current_depth:
+                        # Same depth, add to candidates if not already present
+                        if first_move not in self._candidate_moves:
+                            self._candidate_moves.append(first_move)
+            
             # Emit signal to call callback in main thread
             self.info_signal.emit(info)
     
@@ -190,6 +213,16 @@ class UCIEngine(QObject):
                     except ValueError:
                         pass
                 i += 3
+            elif tokens[i] == "wdl" and i + 3 < len(tokens):
+                # Parse WDL (Win/Draw/Loss) in per mille
+                try:
+                    win = int(tokens[i + 1])
+                    draw = int(tokens[i + 2])
+                    loss = int(tokens[i + 3])
+                    info.wdl = (win, draw, loss)
+                except ValueError:
+                    pass
+                i += 4
             elif tokens[i] == "nodes" and i + 1 < len(tokens):
                 try:
                     info.nodes = int(tokens[i + 1])
@@ -236,22 +269,42 @@ class UCIEngine(QObject):
         
         self._send_command(cmd)
     
-    def go(self, depth: int = None, movetime: int = None, infinite: bool = False):
-        """Start searching for the best move"""
+    def go(self, depth: int = None, movetime: int = None, infinite: bool = False, searchmoves: list = None):
+        """Start searching for the best move
+        
+        Args:
+            depth: Search to this depth
+            movetime: Search for this many milliseconds
+            infinite: Search until stopped
+            searchmoves: Optional list of moves to search (UCI format)
+        """
         if not self.is_ready or self.is_thinking:
             return
+        
+        # Clear candidate moves for new search
+        self._candidate_moves = []
+        self._current_depth = 0
         
         self.is_thinking = True
         cmd = "go"
         
+        # Add searchmoves if specified (must come first according to UCI spec)
+        if searchmoves:
+            cmd += " searchmoves " + " ".join(searchmoves)
+        
         if infinite:
             cmd += " infinite"
-        elif depth:
-            cmd += f" depth {depth}"
-        elif movetime:
-            cmd += f" movetime {movetime}"
         else:
-            cmd += " movetime 2000"  # Default 2 seconds
+            has_condition = False
+            if depth:
+                cmd += f" depth {depth}"
+                has_condition = True
+            if movetime:
+                cmd += f" movetime {movetime}"
+                has_condition = True
+            
+            if not has_condition:
+                cmd += " movetime 2000"  # Default 2 seconds
         
         self._send_command(cmd)
     
@@ -263,3 +316,11 @@ class UCIEngine(QObject):
     def set_option(self, name: str, value: str):
         """Set engine option"""
         self._send_command(f"setoption name {name} value {value}")
+    
+    def get_candidate_moves(self) -> list[str]:
+        """Get the list of candidate moves from the last search
+        
+        Returns a list of candidate moves collected during the search,
+        ordered by when they were first seen at the maximum depth.
+        """
+        return self._candidate_moves.copy()

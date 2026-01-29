@@ -30,6 +30,10 @@ def main():
     
     # Set stylesheet for better appearance
     app.setStyleSheet("""
+        QWidget {
+            font-family: "Microsoft YaHei", "PingFang SC", "Heiti SC", "WenQuanYi Micro Hei", "SimHei", sans-serif;
+            font-size: 10pt;
+        }
         QMainWindow {
             background-color: #f5f5f5;
         }

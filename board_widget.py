@@ -40,6 +40,7 @@ class BoardWidget(QWidget):
         self.last_move: tuple[int, int, int, int] | None = None
         self.flipped = False  # View from black side
         self.hint_move: tuple[int, int, int, int] | None = None  # Hint from engine
+        self.interaction_enabled = True  # Control user interaction
         
         # Edit mode
         self.edit_mode = False
@@ -298,6 +299,10 @@ class BoardWidget(QWidget):
     
     def mousePressEvent(self, event):
         """Handle mouse click"""
+        # Block interaction if disabled (unless in edit mode)
+        if not self.interaction_enabled and not self.edit_mode:
+            return
+            
         pos = self._screen_to_board(event.x(), event.y())
         if pos is None:
             if not self.edit_mode:

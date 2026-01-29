@@ -7,6 +7,7 @@ import os
 import json
 import re
 import datetime
+import time
 from enum import Enum
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, 
@@ -23,6 +24,8 @@ from chess_logic import ChessBoard, Side, STARTING_FEN, Piece, PieceType
 from board_widget import BoardWidget
 from move_history import MoveHistoryWidget
 from uci_engine import UCIEngine, EngineInfo
+from win_rate_bar import WinRateBar
+from analysis_chart import AnalysisChart
 from resource_path import get_settings_path, get_resource_path, get_user_data_path, get_engine_path, get_default_engine_path
 
 
@@ -73,10 +76,22 @@ class SettingsDialog(QDialog):
         engine_layout.addRow("引擎路径:", path_layout)
         
         self.think_time = QSpinBox()
-        self.think_time.setRange(100, 60000)
+        self.think_time.setRange(0, 600000)  # Up to 600 seconds
         self.think_time.setValue(2000)
         self.think_time.setSuffix(" 毫秒")
+        self.think_time.setSpecialValueText("不限")
         engine_layout.addRow("思考时间:", self.think_time)
+        
+        self.depth = QSpinBox()
+        self.depth.setRange(0, 100)
+        self.depth.setValue(0)
+        self.depth.setSpecialValueText("不限")
+        engine_layout.addRow("思考深度:", self.depth)
+        
+        self.threads = QSpinBox()
+        self.threads.setRange(1, 32)
+        self.threads.setValue(1)
+        engine_layout.addRow("线程数:", self.threads)
         
         engine_group.setLayout(engine_layout)
         layout.addWidget(engine_group)
@@ -104,7 +119,9 @@ class SettingsDialog(QDialog):
             'red_player': PlayerType.HUMAN if self.red_player.currentIndex() == 0 else PlayerType.ENGINE,
             'black_player': PlayerType.HUMAN if self.black_player.currentIndex() == 0 else PlayerType.ENGINE,
             'engine_path': self.engine_path,
-            'think_time': self.think_time.value()
+            'think_time': self.think_time.value(),
+            'depth': self.depth.value(),
+            'threads': self.threads.value()
         }
     
     def set_settings(self, settings: dict):
@@ -118,6 +135,10 @@ class SettingsDialog(QDialog):
             self.engine_path_label.setText(os.path.basename(settings['engine_path']))
         if 'think_time' in settings:
             self.think_time.setValue(settings['think_time'])
+        if 'depth' in settings:
+            self.depth.setValue(settings['depth'])
+        if 'threads' in settings:
+            self.threads.setValue(settings['threads'])
 
 
 class BoardEditorDialog(QDialog):
@@ -358,7 +379,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         
         self.setWindowTitle("中国象棋")
-        self.setMinimumSize(850, 780)
+        self.setMinimumSize(1100, 800)
         
         # Game state
         self.board = ChessBoard()
@@ -366,7 +387,9 @@ class MainWindow(QMainWindow):
             'red_player': PlayerType.HUMAN,
             'black_player': PlayerType.ENGINE,
             'engine_path': '',
-            'think_time': 2000
+            'think_time': 2000,
+            'depth': 0,
+            'threads': 1
         }
         
         # Engine
@@ -396,6 +419,23 @@ class MainWindow(QMainWindow):
         
         self._update_status()
     
+    def _get_engine_go_params(self):
+        """Get parameters for engine.go based on settings"""
+        think_time = self.settings['think_time']
+        depth = self.settings.get('depth', 0)
+        
+        if think_time == 0 and depth == 0:
+            return None  # Invalid configuration
+            
+        kwargs = {}
+        if think_time > 0:
+            kwargs['movetime'] = think_time
+        
+        if depth > 0:
+            kwargs['depth'] = depth
+            
+        return kwargs
+
     def _setup_ui(self):
         """Setup the main UI layout"""
         central = QWidget()
@@ -404,19 +444,44 @@ class MainWindow(QMainWindow):
         layout = QHBoxLayout(central)
         layout.setContentsMargins(10, 10, 10, 10)
         
+        # Container for win rate bar and board (to align heights)
+        board_container = QHBoxLayout()
+        board_container.setSpacing(5)
+        
+        # Win rate bar (left side of board)
+        self.win_rate_bar = WinRateBar()
+        board_container.addWidget(self.win_rate_bar)
+        
         # Board
         self.board_widget = BoardWidget()
         self.board_widget.set_board(self.board)
         self.board_widget.move_made.connect(self._on_player_move)
-        layout.addWidget(self.board_widget, stretch=1)
+        board_container.addWidget(self.board_widget)
+        
+        layout.addLayout(board_container, stretch=1)
         
         # Side panel
         side_panel = QVBoxLayout()
         
+        # Move history and analysis chart in horizontal layout
+        history_chart_layout = QHBoxLayout()
+        
         # Move history
         self.move_history = MoveHistoryWidget()
         self.move_history.move_selected.connect(self._goto_move)
-        side_panel.addWidget(self.move_history)
+        history_chart_layout.addWidget(self.move_history, stretch=1)
+        
+        # Analysis chart (hidden by default)
+        self.analysis_chart = AnalysisChart()
+        self.analysis_chart.point_clicked.connect(self._goto_move)
+        self.analysis_chart.score_updated.connect(self._on_analysis_score_update)
+        self.analysis_chart.hide()  # Hidden until analysis is run
+        history_chart_layout.addWidget(self.analysis_chart)
+        
+        side_panel.addLayout(history_chart_layout, stretch=1)
+        
+        # Info row: Engine info and analysis score side by side
+        info_row = QHBoxLayout()
         
         # Engine info
         self.engine_info_label = QLabel("引擎: 未连接")
@@ -429,7 +494,23 @@ class MainWindow(QMainWindow):
                 font-size: 12px;
             }
         """)
-        side_panel.addWidget(self.engine_info_label)
+        info_row.addWidget(self.engine_info_label, stretch=1)
+        
+        # Analysis score label (visible when analysis chart is shown)
+        self.analysis_score_label = QLabel("")
+        self.analysis_score_label.setWordWrap(True)
+        self.analysis_score_label.setStyleSheet("""
+            QLabel {
+                padding: 10px;
+                background-color: #f5f5f5;
+                border-radius: 5px;
+                font-size: 12px;
+            }
+        """)
+        self.analysis_score_label.hide()  # Hidden by default
+        info_row.addWidget(self.analysis_score_label)
+        
+        side_panel.addLayout(info_row)
         
         # Game controls
         controls_layout = QGridLayout()
@@ -572,6 +653,12 @@ class MainWindow(QMainWindow):
         
         toolbar.addSeparator()
         
+        analyze_btn = QAction("分析", self)
+        analyze_btn.triggered.connect(self._start_analysis)
+        toolbar.addAction(analyze_btn)
+        
+        toolbar.addSeparator()
+        
         settings_btn = QAction("设置", self)
         settings_btn.triggered.connect(self._show_settings)
         toolbar.addAction(settings_btn)
@@ -619,6 +706,14 @@ class MainWindow(QMainWindow):
         self.redo_stack.clear() # Clear redo stack
         self.board_widget.hint_move = None
         self.edited_position = False  # Reset edited position flag
+        
+        # Reset win rate bar
+        self.win_rate_bar.reset()
+        
+        # Clear and hide analysis chart
+        self.analysis_chart.clear()
+        self.analysis_chart.hide()
+        self.analysis_score_label.hide()
         
         if self.engine.is_ready:
             self.engine.new_game()
@@ -710,7 +805,51 @@ class MainWindow(QMainWindow):
         self.board_widget.hint_move = None
         self._rebuild_move_history_list()
         self._update_status()
+        
+        # Update analysis chart highlight
+        if self.analysis_chart.isVisible():
+            current_index = len(self.board.move_history) - 1
+            self.analysis_chart.highlight_move(current_index)
+        
         self._check_engine_turn()
+    
+    def _on_analysis_score_update(self, move_index: int, score_cp: int):
+        """Handle score update from analysis chart"""
+        if score_cp >= 30000:
+            text = "红方必胜"
+        elif score_cp <= -30000:
+            text = "黑方必胜"
+        else:
+            # Show raw score (cumulative score) similar to hint
+            if score_cp > 0:
+                text = f"+{score_cp}"
+            else:
+                text = f"{score_cp}"
+        
+        # Color logic is handled below (always black for score)
+        
+        move_num = move_index // 2 + 1
+        is_red_move = move_index % 2 == 0
+        side = "红" if is_red_move else "黑"
+        
+        # Color for the prefix based on whose move it is
+        prefix_color = "#c81e1e" if is_red_move else "#1a1a1a"
+        
+        # Color for the score is always black as requested
+        score_color = "#1a1a1a"
+        
+        self.analysis_score_label.setText(
+            f"<html><span style='color:{prefix_color}; font-weight:bold;'>第{move_num}步({side})</span>: "
+            f"<span style='color:{score_color};'>{text}</span></html>"
+        )
+        self.analysis_score_label.setStyleSheet("""
+            QLabel {
+                padding: 10px;
+                background-color: #f5f5f5;
+                border-radius: 5px;
+                font-size: 12px;
+            }
+        """)
 
     def _step_back(self, allow_redo=True):
         """Go to previous move"""
@@ -760,6 +899,8 @@ class MainWindow(QMainWindow):
     def _flip_board(self):
         """Flip the board view"""
         self.board_widget.flip_board()
+        # Sync win rate bar with board orientation
+        self.win_rate_bar.set_flipped(self.board_widget.flipped)
     
     def _edit_board(self):
         """Open board editor"""
@@ -940,6 +1081,11 @@ class MainWindow(QMainWindow):
             if new_settings['engine_path'] != self.settings['engine_path'] and new_settings['engine_path']:
                 self._start_engine(new_settings['engine_path'])
             
+            # Check if threads changed
+            if 'threads' in new_settings and new_settings['threads'] != self.settings.get('threads'):
+                if self.engine.is_ready:
+                    self.engine.set_option('Threads', new_settings['threads'])
+            
             self.settings.update(new_settings)
             self.save_settings()
             self._update_status()
@@ -1002,6 +1148,10 @@ class MainWindow(QMainWindow):
     
     def _on_engine_ready(self):
         """Called when engine is ready"""
+        # Apply settings
+        if 'threads' in self.settings:
+            self.engine.set_option('Threads', self.settings['threads'])
+            
         # 如果正在显示提示结果，不覆盖
         if self.showing_hint_result and self.hint_info_text:
             return
@@ -1011,6 +1161,9 @@ class MainWindow(QMainWindow):
     
     def _on_player_move(self, move: str):
         """Called when player makes a move"""
+        # Disable interaction immediately to prevent double moves while checking turn
+        self.board_widget.interaction_enabled = False
+        
         self.redo_stack.clear() # Clear redo stack
         self.edited_position = False  # Reset edited position flag after a move
         
@@ -1039,11 +1192,13 @@ class MainWindow(QMainWindow):
         """Check if it's engine's turn and start thinking"""
         # Check if game is over (checkmate, stalemate, or draw)
         if self._is_game_over():
+            self.board_widget.interaction_enabled = False
             return
         
         current_player = self.settings['red_player'] if self.board.current_side == Side.RED else self.settings['black_player']
         
         if current_player == PlayerType.ENGINE:
+            self.board_widget.interaction_enabled = False
             if self.engine.is_ready and not self.engine.is_thinking:
                 # 清除提示状态，因为轮到引擎走棋了
                 self.showing_hint_result = False
@@ -1051,8 +1206,17 @@ class MainWindow(QMainWindow):
                 # Set position using FEN (works for both normal games and edited positions)
                 fen = self.board.to_fen()
                 self.engine.set_position(fen=fen)
-                self.engine.go(movetime=self.settings['think_time'])
+                
+                params = self._get_engine_go_params()
+                if params is None:
+                    # Invalid settings, warn user once if possible, or print to status
+                    self.engine_info_label.setText("错误: 思考时间和深度不能同时为0")
+                    return
+                
+                self.engine.go(**params)
                 self._update_status()
+        else:
+            self.board_widget.interaction_enabled = True
     
     def _request_hint(self):
         """Request a move hint from the engine"""
@@ -1077,16 +1241,28 @@ class MainWindow(QMainWindow):
         self.hint_mode = True
         self.hint_btn.setEnabled(False)
         self.hint_btn.setText("思考中...")
+        self.board_widget.interaction_enabled = False # Disable board while thinking
         
         fen = self.board.to_fen()
         self.engine.set_position(fen=fen)
-        self.engine.go(movetime=self.settings['think_time'])
+        
+        params = self._get_engine_go_params()
+        if params is None:
+            QMessageBox.warning(self, "错误", "思考时间和深度不能同时为0")
+            self.hint_mode = False
+            self.hint_btn.setEnabled(True)
+            self.hint_btn.setText("提示")
+            self.board_widget.interaction_enabled = True
+            return
+        
+        self.engine.go(**params)
     
     def _on_engine_move(self, move: str):
         """Called when engine returns a move"""
         if self.hint_mode:
             # Hint mode: display the move on board, don't execute
             self.hint_mode = False
+            self.board_widget.interaction_enabled = True # Re-enable board
             self.showing_hint_result = True
             self.hint_btn.setEnabled(True)
             self.hint_btn.setText("提示")
@@ -1119,13 +1295,75 @@ class MainWindow(QMainWindow):
             self.showing_hint_result = False
             self.hint_info_text = ""
             
+            # Clear excluded moves on successful move
+            if hasattr(self, '_excluded_moves'):
+                self._excluded_moves = []
+            
             self._rebuild_move_history_list()
-        
-        self._update_status()
-        self._check_game_result()
-        
-        # Check if next turn is also engine
-        QTimer.singleShot(100, self._check_engine_turn)
+            
+            self._update_status()
+            self._check_game_result()
+            
+            # Reset engine info label
+            self.engine_info_label.setText("引擎: 就绪")
+            
+            # Check if next turn is also engine
+            QTimer.singleShot(100, self._check_engine_turn)
+        else:
+            # Move was rejected (likely due to perpetual check rule)
+            # Try to find an alternative move from the candidate list
+            candidates = self.engine.get_candidate_moves()
+            
+            # Find the first valid alternative move
+            found_alternative = False
+            for alt_move in candidates:
+                if alt_move != move:  # Skip the rejected move
+                    if self.board.make_move(alt_move):
+                        # Found a valid alternative
+                        found_alternative = True
+                        self.engine_info_label.setText(f"走法 {move} 违反规则，改走 {alt_move}")
+                        
+                        self.redo_stack.clear()
+                        self.edited_position = False
+                        self.board_widget.set_board(self.board)
+                        self.board_widget.set_last_move(alt_move)
+                        
+                        self.board_widget.hint_move = None
+                        self.showing_hint_result = False
+                        self.hint_info_text = ""
+                        
+                        self._rebuild_move_history_list()
+                        self._update_status()
+                        self._check_game_result()
+                        
+                        QTimer.singleShot(100, self._check_engine_turn)
+                        break
+            
+            if not found_alternative:
+                # No valid alternative found - try all legal moves as last resort
+                all_moves = self.board.get_all_legal_moves()
+                for alt_move in all_moves:
+                    if alt_move != move:
+                        if self.board.make_move(alt_move):
+                            found_alternative = True
+                            self.engine_info_label.setText(f"走法 {move} 违反规则，强制变招 {alt_move}")
+                            
+                            self.redo_stack.clear()
+                            self.edited_position = False
+                            self.board_widget.set_board(self.board)
+                            self.board_widget.set_last_move(alt_move)
+                            
+                            self._rebuild_move_history_list()
+                            self._update_status()
+                            self._check_game_result()
+                            
+                            QTimer.singleShot(100, self._check_engine_turn)
+                            break
+            
+            if not found_alternative:
+                # No valid moves at all - this side loses
+                self.engine_info_label.setText("无有效走法，长将方判负")
+                self._update_status()
     
     def _is_game_over(self) -> bool:
         """Check if the game has ended"""
@@ -1226,29 +1464,254 @@ class MainWindow(QMainWindow):
     
     def _on_engine_info(self, info: EngineInfo):
         """Called when engine sends info"""
+        # If engine is not thinking, ignore info messages
+        # This prevents delayed info packets from overwriting "Engine Ready" status
+        if not self.engine.is_thinking:
+            return
+
+        # Save score for potential use (hint etc.) - update this regardless of throttling
+        self.last_engine_score_cp = info.score
+        score_str = f"{info.score / 100:.2f}"
+        self.last_engine_score_str = score_str
+        
+        # Limit UI update frequency to reduce flickering (every 200ms)
+        current_time = time.time()
+        if hasattr(self, '_last_info_update_time'):
+            if current_time - self._last_info_update_time < 0.2:
+                return
+        self._last_info_update_time = current_time
+
+        # Update win rate bar based on engine WDL (Win/Draw/Loss) data
+        # Note: WDL is from the perspective of the side to move
+        # We need to convert it to red's perspective
+        win, draw, loss = info.wdl
+        if self.board.current_side == Side.RED:
+            # Red's view: win=red wins, loss=black wins
+            self.win_rate_bar.set_wdl(win, draw, loss)
+        else:
+            # Black's view: win=black wins, loss=red wins
+            # Swap win and loss for red's perspective
+            self.win_rate_bar.set_wdl(loss, draw, win)
+        
         # 如果正在显示提示结果，保持提示信息不变
         if self.showing_hint_result:
             # 保持显示提示结果
             if self.hint_info_text:
                 self.engine_info_label.setText(self.hint_info_text)
             return
-
-        score_str = f"{info.score / 100:.2f}"
-        self.last_engine_score_str = score_str
         
-        lines = [
-            f"深度: {info.depth}",
-            f"分数: {score_str}",
-        ]
         if info.nps > 0:
-            lines.append(f"速度: {info.nps // 1000}k 节点/秒")
+            lines = [
+                f"深度: {info.depth}",
+                f"分数: {score_str}",
+                f"速度: {info.nps // 1000}k 节点/秒"
+            ]
+        else:
+            lines = []
+            
         if info.pv:
-            pv_short = " ".join(info.pv.split()[:3])
-            lines.append(f"主变: {pv_short}")
+            try:
+                # Convert PV to Chinese notation
+                temp_board = self.board.copy()
+                pv_moves = info.pv.split()
+                # Limit to 3 moves to keep it readable
+                pv_moves_short = pv_moves[:3]
+                chinese_pv = []
+                
+                for move in pv_moves_short:
+                    cn_move = temp_board.move_to_chinese(move)
+                    chinese_pv.append(cn_move)
+                    # Make move on temp board to update state for next move notation
+                    temp_board.make_move(move)
+                
+                pv_text = " ".join(chinese_pv)
+                lines.append(f"主变: {pv_text}")
+            except Exception:
+                # Fallback to simple string if conversion fails（e.g. invalid PV）
+                pv_short = " ".join(info.pv.split()[:3])
+                lines.append(f"主变: {pv_short}")
         
         self.engine_info_label.setText("引擎:\n" + "\n".join(lines))
     
+    def _start_analysis(self):
+        """Start analyzing all moves in the game history"""
+        if not self.engine.is_ready:
+            QMessageBox.information(self, "提示", "引擎未连接，无法进行分析")
+            return
+        
+        if self.engine.is_thinking:
+            QMessageBox.information(self, "提示", "引擎正在思考中，请稍后再试")
+            return
+        
+        if not self.board.move_history and not self.redo_stack:
+            QMessageBox.information(self, "提示", "没有可分析的走法")
+            return
+        
+        # Stop any ongoing operations
+        if self.engine.is_thinking:
+            self.engine.stop_thinking()
+        
+        # Setup analysis state
+        self._analysis_mode = True
+        self._analysis_scores = []
+        self._analysis_positions = []
+        self._analysis_current_index = 0
+        
+        # Build list of all positions to analyze
+        temp_board = ChessBoard()
+        
+        # Add starting position
+        self._analysis_positions.append(temp_board.to_fen())
+        
+        # Collect all moves (current history + redo stack in order)
+        all_moves = list(self.board.move_history)
+        for move in reversed(self.redo_stack):
+            all_moves.append(move)
+        
+        # Apply moves and collect positions
+        for move in all_moves:
+            temp_board.make_move(move)
+            self._analysis_positions.append(temp_board.to_fen())
+        
+        # We analyze positions after each move (so skip starting position)
+        # Actually, analyze positions 0 to len(all_moves)-1 which correspond to
+        # the positions BEFORE each move was made, to evaluate that move
+        # Let's analyze positions after each move instead
+        self._analysis_positions = self._analysis_positions[1:]  # Skip starting position
+        
+        if not self._analysis_positions:
+            QMessageBox.information(self, "提示", "没有可分析的走法")
+            return
+        
+        # Save original callbacks
+        self._original_on_bestmove = self.engine.on_bestmove
+        self._original_on_info = self.engine.on_info
+        
+        # Set analysis callbacks
+        self.engine.on_bestmove = self._on_analysis_bestmove
+        self.engine.on_info = self._on_analysis_info
+        
+        # Clear and show analysis chart
+        self.analysis_chart.clear()
+        self.analysis_chart.show()
+        self.analysis_score_label.show()
+        
+        # Update status
+        self.engine_info_label.setText(f"正在分析... (0/{len(self._analysis_positions)})")
+        
+        # Start analyzing first position
+        self._analyze_next_position()
+    
+    def _analyze_next_position(self):
+        """Analyze the next position in the queue"""
+        if not hasattr(self, '_analysis_mode') or not self._analysis_mode:
+            return
+        
+        if self._analysis_current_index >= len(self._analysis_positions):
+            # Analysis complete
+            self._finish_analysis()
+            return
+        
+        fen = self._analysis_positions[self._analysis_current_index]
+        
+        # Set position and start analysis
+        self.engine.set_position(fen=fen)
+        
+        # Use settings for analysis
+        params = self._get_engine_go_params()
+        if params is None:
+            QMessageBox.warning(self, "错误", "思考时间和深度不能同时为0")
+            self._finish_analysis()
+            return
+
+        self.engine.go(**params)
+        
+        # Update progress
+        progress = self._analysis_current_index + 1
+        total = len(self._analysis_positions)
+        self.engine_info_label.setText(f"正在分析... ({progress}/{total})")
+    
+    def _on_analysis_info(self, info: EngineInfo):
+        """Handle engine info during analysis"""
+        # Store the latest score for this position (raw score from engine)
+        if hasattr(self, '_analysis_mode') and self._analysis_mode:
+            self._analysis_last_score = info.score
+    
+    def _on_analysis_bestmove(self, move: str):
+        """Handle bestmove during analysis - move to next position"""
+        if not hasattr(self, '_analysis_mode') or not self._analysis_mode:
+            return
+        
+        # Record the score for this position
+        score = getattr(self, '_analysis_last_score', 0)
+        
+        # Adjust score: we want positive = red advantage, negative = black advantage
+        # The engine reports score from the perspective of the side to move
+        # 
+        # We analyze positions AFTER each move:
+        # - Index 0 = after red's 1st move → it's black's turn → engine gives black's perspective → NEGATE
+        # - Index 1 = after black's 1st move → it's red's turn → engine gives red's perspective → OK
+        # - Index 2 = after red's 2nd move → it's black's turn → engine gives black's perspective → NEGATE
+        # 
+        # Rule: even indices need negation, odd indices don't
+        if self._analysis_current_index % 2 == 0:
+            # After red's move, engine reports from black's perspective, negate it
+            score = -score
+        
+        self._analysis_scores.append(score)
+        
+        # Update chart
+        self.analysis_chart.set_scores(self._analysis_scores)
+        
+        # Move to next position
+        self._analysis_current_index += 1
+        
+        # Use QTimer to avoid blocking
+        QTimer.singleShot(50, self._analyze_next_position)
+    
+    def _finish_analysis(self):
+        """Finish the analysis and restore normal operation"""
+        self._analysis_mode = False
+        
+        # Restore original callbacks
+        if hasattr(self, '_original_on_bestmove'):
+            self.engine.on_bestmove = self._original_on_bestmove
+        if hasattr(self, '_original_on_info'):
+            self.engine.on_info = self._original_on_info
+        
+        # Update status
+        total_moves = len(self._analysis_scores)
+        self.engine_info_label.setText(f"分析完成: {total_moves} 步已分析")
+        
+        # Highlight current move in chart
+        current_index = len(self.board.move_history) - 1
+        if current_index >= 0:
+            self.analysis_chart.highlight_move(current_index)
+        
+        self._update_status()
+    
+    def _cancel_analysis(self):
+        """Cancel ongoing analysis"""
+        if hasattr(self, '_analysis_mode') and self._analysis_mode:
+            self._analysis_mode = False
+            
+            if self.engine.is_thinking:
+                self.engine.stop_thinking()
+            
+            # Restore original callbacks
+            if hasattr(self, '_original_on_bestmove'):
+                self.engine.on_bestmove = self._original_on_bestmove
+            if hasattr(self, '_original_on_info'):
+                self.engine.on_info = self._original_on_info
+            
+            self.engine_info_label.setText("分析已取消")
+    
     def closeEvent(self, event):
         """Handle window close"""
+        # Cancel any ongoing analysis
+        if hasattr(self, '_analysis_mode') and self._analysis_mode:
+            self._cancel_analysis()
+        
         self.engine.stop()
         event.accept()
+
