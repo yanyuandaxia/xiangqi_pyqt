@@ -1,3 +1,10 @@
+Linux/
+Windows/
+MacOS/
+.ssh/
+.vscode/
+*.nnue
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
