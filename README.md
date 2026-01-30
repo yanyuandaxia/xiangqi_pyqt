@@ -85,12 +85,12 @@ pyinstaller xiangqi.spec
 
 **MacOS:**
 ```bash
-pyinstaller --clean --windowed --name "Xiangqi" --add-data "*.png:." --add-data "*.nnue:." main.py
+pyinstaller --clean --windowed --name "Xiangqi" --add-data "xiangqi_pyqt.png:." --add-data "pikafish.nnue:." main.py
 ```
 
 **Windows:**
 ```powershell
-pyinstaller --clean --noconsole --name "Xiangqi" --add-data "xiangi_pyqt.png;." --add-data "pikafish.nnue;." main.py
+pyinstaller --clean --noconsole --name "Xiangqi" --add-data "xiangqi_pyqt.png;." --add-data "pikafish.nnue;." main.py
 ```
 
 ### 游戏与引擎设置
