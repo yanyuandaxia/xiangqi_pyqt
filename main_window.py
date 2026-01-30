@@ -698,6 +698,12 @@ class MainWindow(QMainWindow):
         settings_btn = QAction("设置", self)
         settings_btn.triggered.connect(self._show_settings)
         toolbar.addAction(settings_btn)
+        
+        toolbar.addSeparator()
+        
+        about_btn = QAction("关于", self)
+        about_btn.triggered.connect(self._show_about)
+        toolbar.addAction(about_btn)
     
     def _setup_statusbar(self):
         """Setup the status bar"""
@@ -1181,6 +1187,15 @@ class MainWindow(QMainWindow):
             self.save_settings()
             self._update_status()
             self._check_engine_turn()
+            
+    def _show_about(self):
+        """Show about dialog"""
+        QMessageBox.about(self, "关于", 
+            "软件名称：xiangqi_pyqt\n"
+            "软件版本：v1.0.1\n"
+            "软件仓库：https://github.com/yanyuandaxia/xiangqi_pyqt\n"
+            "作者：yanyuandaxia"
+        )
             
     def load_settings(self):
         """Load settings from JSON file"""
