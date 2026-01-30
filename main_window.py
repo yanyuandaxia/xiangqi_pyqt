@@ -26,6 +26,7 @@ from move_history import MoveHistoryWidget
 from uci_engine import UCIEngine, EngineInfo
 from win_rate_bar import WinRateBar
 from analysis_chart import AnalysisChart
+from clock_widget import ClockManager
 from resource_path import get_settings_path, get_resource_path, get_user_data_path, get_engine_path, get_default_engine_path
 
 
@@ -393,7 +394,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         
         self.setWindowTitle("中国象棋")
-        self.setMinimumSize(1100, 800)
+        self.setMinimumSize(1100, 900)
         
         # Game state
         self.board = ChessBoard()
@@ -459,21 +460,35 @@ class MainWindow(QMainWindow):
         layout = QHBoxLayout(central)
         layout.setContentsMargins(10, 10, 10, 10)
         
-        # Container for win rate bar and board (to align heights)
-        board_container = QHBoxLayout()
-        board_container.setSpacing(5)
+        # Clock Manager (Create logic and widgets)
+        self.clock_widget = ClockManager()
         
-        # Win rate bar (left side of board)
+        # Container for game area (WinRate, Board, Clocks)
+        game_area_layout = QGridLayout()
+        game_area_layout.setSpacing(5)
+        # Vertical spacing for clocks
+        game_area_layout.setVerticalSpacing(10)
+        
+        # Win rate bar (row 0-2, col 0) - Spans all 3 rows
         self.win_rate_bar = WinRateBar()
-        board_container.addWidget(self.win_rate_bar)
+        game_area_layout.addWidget(self.win_rate_bar, 0, 0, 3, 1)
         
-        # Board
+        # Top Clock (row 0, col 1)
+        game_area_layout.addWidget(self.clock_widget.top_label, 0, 1, Qt.AlignCenter)
+        
+        # Board (row 1, col 1)
         self.board_widget = BoardWidget()
         self.board_widget.set_board(self.board)
         self.board_widget.move_made.connect(self._on_player_move)
-        board_container.addWidget(self.board_widget)
+        game_area_layout.addWidget(self.board_widget, 1, 1)
         
-        layout.addLayout(board_container, stretch=1)
+        # Bottom Clock (row 2, col 1)
+        game_area_layout.addWidget(self.clock_widget.bottom_label, 2, 1, Qt.AlignCenter)
+        
+        # Set column stretch
+        game_area_layout.setColumnStretch(1, 1) # Board takes extra space
+        
+        layout.addLayout(game_area_layout, stretch=1)
         
         # Side panel
         side_panel = QVBoxLayout()
@@ -673,6 +688,12 @@ class MainWindow(QMainWindow):
         toolbar.addAction(analyze_btn)
         
         toolbar.addSeparator()
+
+        timer_btn = QAction("计时", self)
+        timer_btn.triggered.connect(self._toggle_clock)
+        toolbar.addAction(timer_btn)
+        
+        toolbar.addSeparator()
         
         settings_btn = QAction("设置", self)
         settings_btn.triggered.connect(self._show_settings)
@@ -734,7 +755,40 @@ class MainWindow(QMainWindow):
             self.engine.new_game()
         
         self._update_status()
+        self._update_clock()
         self._check_engine_turn()
+    
+    def _toggle_clock(self):
+        """Toggle clock visibility"""
+        if self.clock_widget.isVisible():
+            self.clock_widget.hide()
+            self.clock_widget.reset()
+        else:
+            self.clock_widget.show()
+            self._update_clock()
+            
+    def _update_clock(self):
+        """Update clock state based on game state"""
+        if not self.clock_widget.isVisible():
+            return
+            
+        # Don't run clock during analysis
+        if hasattr(self, '_analysis_mode') and self._analysis_mode:
+            self.clock_widget.stop_timing()
+            return
+            
+        # Check if game is over
+        if self.board.is_checkmate() or self.board.is_draw() or self.board.is_stalemate():
+            self.clock_widget.stop_timing()
+            return
+            
+        move_count = len(self.board.move_history)
+        
+        if move_count == 0:
+            self.clock_widget.reset()
+        else:
+            # Game is in progress, start timing for current side
+            self.clock_widget.start_timing(self.board.current_side)
     
     def _rebuild_move_history_list(self):
         """Rebuild move history widget content"""
@@ -819,7 +873,9 @@ class MainWindow(QMainWindow):
         self.board_widget.set_board(self.board)
         self.board_widget.hint_move = None
         self._rebuild_move_history_list()
+        self._rebuild_move_history_list()
         self._update_status()
+        self.clock_widget.stop_timing() # Stop clock when navigating history
         
         # Update analysis chart highlight
         if self.analysis_chart.isVisible():
@@ -881,7 +937,9 @@ class MainWindow(QMainWindow):
             self.board_widget.set_board(self.board)
             self.board_widget.hint_move = None
             self._rebuild_move_history_list()
+            self._rebuild_move_history_list()
             self._update_status()
+            self.clock_widget.stop_timing() # Stop clock when navigating history
 
     def _step_forward(self):
         """Go to next move"""
@@ -898,6 +956,7 @@ class MainWindow(QMainWindow):
             self._rebuild_move_history_list()
             self._update_status()
             self._check_game_result()
+            self.clock_widget.stop_timing() # Stop clock when navigating history using redo
 
     def _undo_move(self):
         """Undo the last move (smart undo)"""
@@ -916,6 +975,8 @@ class MainWindow(QMainWindow):
         self.board_widget.flip_board()
         # Sync win rate bar with board orientation
         self.win_rate_bar.set_flipped(self.board_widget.flipped)
+        # Sync clock positions
+        self.clock_widget.set_flipped(self.board_widget.flipped)
     
     def _edit_board(self):
         """Open board editor"""
@@ -966,6 +1027,8 @@ class MainWindow(QMainWindow):
             # Board position has been normalized (red at bottom) in _confirm
             # Reset view to normal orientation
             self.board_widget.flipped = False
+            self.win_rate_bar.set_flipped(False)
+            self.clock_widget.set_flipped(False)
             self.board_widget.update()
             
             if self.engine.is_ready:
@@ -1207,6 +1270,7 @@ class MainWindow(QMainWindow):
         self._rebuild_move_history_list()
         
         self._update_status()
+        self._update_clock()
         self._check_game_result()
         self._check_engine_turn()
     
@@ -1334,6 +1398,7 @@ class MainWindow(QMainWindow):
             self._rebuild_move_history_list()
             
             self._update_status()
+            self._update_clock()
             self._check_game_result()
             
             # Reset engine info label
@@ -1366,6 +1431,7 @@ class MainWindow(QMainWindow):
                         
                         self._rebuild_move_history_list()
                         self._update_status()
+                        self._update_clock()
                         self._check_game_result()
                         
                         QTimer.singleShot(100, self._check_engine_turn)
@@ -1387,6 +1453,7 @@ class MainWindow(QMainWindow):
                             
                             self._rebuild_move_history_list()
                             self._update_status()
+                            self._update_clock()
                             self._check_game_result()
                             
                             QTimer.singleShot(100, self._check_engine_turn)
@@ -1582,6 +1649,9 @@ class MainWindow(QMainWindow):
         # Stop any ongoing operations
         if self.engine.is_thinking:
             self.engine.stop_thinking()
+            
+        # Stop clock during analysis
+        self.clock_widget.stop_timing()
         
         # Setup analysis state
         self._analysis_mode = True
