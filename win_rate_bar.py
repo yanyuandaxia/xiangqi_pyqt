@@ -172,7 +172,7 @@ class _WinRateBarCanvas(QWidget):
         self.update()
     
     def paintEvent(self, event):
-        """Paint the win rate bar with three colors, order depends on flipped state"""
+        """Paint the win rate bar with two main colors (splitting draw), order depends on flipped state"""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         
@@ -185,67 +185,96 @@ class _WinRateBarCanvas(QWidget):
         bar_w = w - 2 * margin
         bar_h = h - 2 * margin
         
-        # Calculate section heights based on WDL
+        # Calculate visual heights based on WDL
+        # Distribute draw evenly to both sides for visualization: 
+        # visual_red = win + draw/2
+        # visual_black = loss + draw/2
         total = self._win + self._draw + self._loss
         if total <= 0:
             total = 1000
+            
+        red_chance = (self._win + self._draw / 2) / total
+        black_chance = (self._loss + self._draw / 2) / total
         
-        red_ratio = self._win / total
-        draw_ratio = self._draw / total
-        black_ratio = self._loss / total
+        red_height = int(bar_h * red_chance)
+        black_height = bar_h - red_height
         
-        red_height = int(bar_h * red_ratio)
-        draw_height = int(bar_h * draw_ratio)
-        black_height = bar_h - red_height - draw_height  # Remainder to avoid gaps
+        # Determine actual percentage for labels
+        red_pct = int(red_chance * 100)
+        black_pct = 100 - red_pct
         
         current_y = bar_y
         
+        # Font for text
+        font = QFont()
+        font.setPixelSize(10)
+        font.setBold(True)
+        painter.setFont(font)
+        
         # Draw order depends on flipped state:
-        # Not flipped (red at bottom): black on top, draw in middle, red at bottom
-        # Flipped (black at bottom): red on top, draw in middle, black at bottom
+        # Not flipped (red at bottom): black on top, red at bottom
+        # Flipped (black at bottom): red on top, black at bottom
         
         if self._flipped:
-            # Flipped: red on top, draw in middle, black at bottom
-            # Draw red section (top) - Red wins
+            # Flipped: red on top, black at bottom
+            
+            # Draw red section (top)
             if red_height > 0:
                 red_gradient = QLinearGradient(0, current_y, 0, current_y + red_height)
                 red_gradient.setColorAt(0, QColor("#e63946"))
                 red_gradient.setColorAt(1, QColor("#c81e1e"))
                 painter.fillRect(bar_x, current_y, bar_w, red_height, red_gradient)
+                
+                # Draw label if enough space
+                if red_height > 20:
+                    painter.setPen(QColor("white"))
+                    label_rect = painter.boundingRect(bar_x, current_y, bar_w, 20, Qt.AlignCenter, f"{red_pct}")
+                    # Position at the very top of the red section
+                    painter.drawText(bar_x, current_y + 2, bar_w, 20, Qt.AlignCenter | Qt.AlignTop, f"{red_pct}")
+                    
                 current_y += red_height
             
-            # Draw gray section (middle) - Draw
-            if draw_height > 0:
-                painter.fillRect(bar_x, current_y, bar_w, draw_height, QColor("#777777"))
-                current_y += draw_height
-            
-            # Draw black section (bottom) - Black wins
+            # Draw black section (bottom)
             if black_height > 0:
                 black_gradient = QLinearGradient(0, current_y, 0, current_y + black_height)
                 black_gradient.setColorAt(0, QColor("#3a3a3a"))
                 black_gradient.setColorAt(1, QColor("#1a1a1a"))
                 painter.fillRect(bar_x, current_y, bar_w, black_height, black_gradient)
+                
+                # Draw label if enough space
+                if black_height > 20:
+                    painter.setPen(QColor("white"))
+                    # Position at the bottom of the black section
+                    painter.drawText(bar_x, current_y + black_height - 22, bar_w, 20, Qt.AlignCenter | Qt.AlignBottom, f"{black_pct}")
+
         else:
-            # Not flipped: black on top, draw in middle, red at bottom
-            # Draw black section (top) - Black wins
+            # Not flipped: black on top, red at bottom
+            
+            # Draw black section (top)
             if black_height > 0:
                 black_gradient = QLinearGradient(0, current_y, 0, current_y + black_height)
                 black_gradient.setColorAt(0, QColor("#1a1a1a"))
                 black_gradient.setColorAt(1, QColor("#3a3a3a"))
                 painter.fillRect(bar_x, current_y, bar_w, black_height, black_gradient)
+                
+                # Draw label
+                if black_height > 20:
+                    painter.setPen(QColor("white"))
+                    painter.drawText(bar_x, current_y + 2, bar_w, 20, Qt.AlignCenter | Qt.AlignTop, f"{black_pct}")
+                    
                 current_y += black_height
             
-            # Draw gray section (middle) - Draw
-            if draw_height > 0:
-                painter.fillRect(bar_x, current_y, bar_w, draw_height, QColor("#777777"))
-                current_y += draw_height
-            
-            # Draw red section (bottom) - Red wins
+            # Draw red section (bottom)
             if red_height > 0:
                 red_gradient = QLinearGradient(0, current_y, 0, current_y + red_height)
                 red_gradient.setColorAt(0, QColor("#c81e1e"))
                 red_gradient.setColorAt(1, QColor("#e63946"))
                 painter.fillRect(bar_x, current_y, bar_w, red_height, red_gradient)
+                
+                # Draw label
+                if red_height > 20:
+                    painter.setPen(QColor("white"))
+                    painter.drawText(bar_x, current_y + red_height - 22, bar_w, 20, Qt.AlignCenter | Qt.AlignBottom, f"{red_pct}")
         
         # Draw border
         pen = QPen(QColor("#888888"))

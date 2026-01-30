@@ -95,6 +95,17 @@ class SettingsDialog(QDialog):
         
         engine_group.setLayout(engine_layout)
         layout.addWidget(engine_group)
+
+        # General settings
+        general_group = QGroupBox("通用设置")
+        general_layout = QFormLayout()
+
+        self.pgn_format = QComboBox()
+        self.pgn_format.addItems(["中文纵线格式 (炮二平五)", "ICCS 坐标格式 (C2-E2)"])
+        general_layout.addRow("棋谱格式:", self.pgn_format)
+
+        general_group.setLayout(general_layout)
+        layout.addWidget(general_group)
         
         # Buttons
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -121,7 +132,8 @@ class SettingsDialog(QDialog):
             'engine_path': self.engine_path,
             'think_time': self.think_time.value(),
             'depth': self.depth.value(),
-            'threads': self.threads.value()
+            'threads': self.threads.value(),
+            'pgn_format': 'ICCS' if self.pgn_format.currentIndex() == 1 else 'Chinese'
         }
     
     def set_settings(self, settings: dict):
@@ -139,6 +151,8 @@ class SettingsDialog(QDialog):
             self.depth.setValue(settings['depth'])
         if 'threads' in settings:
             self.threads.setValue(settings['threads'])
+        if 'pgn_format' in settings:
+            self.pgn_format.setCurrentIndex(1 if settings['pgn_format'] == 'ICCS' else 0)
 
 
 class BoardEditorDialog(QDialog):
@@ -389,7 +403,8 @@ class MainWindow(QMainWindow):
             'engine_path': '',
             'think_time': 2000,
             'depth': 0,
-            'threads': 1
+            'threads': 1,
+            'pgn_format': 'Chinese'
         }
         
         # Engine
@@ -476,7 +491,7 @@ class MainWindow(QMainWindow):
         self.analysis_chart.point_clicked.connect(self._goto_move)
         self.analysis_chart.score_updated.connect(self._on_analysis_score_update)
         self.analysis_chart.hide()  # Hidden until analysis is run
-        history_chart_layout.addWidget(self.analysis_chart)
+        history_chart_layout.addWidget(self.analysis_chart, stretch=1)
         
         side_panel.addLayout(history_chart_layout, stretch=1)
         
@@ -839,7 +854,7 @@ class MainWindow(QMainWindow):
         score_color = "#1a1a1a"
         
         self.analysis_score_label.setText(
-            f"<html><span style='color:{prefix_color}; font-weight:bold;'>第{move_num}步({side})</span>: "
+            f"<html><span style='color:{prefix_color}; font-weight:bold;'>第{move_num}回合({side})</span>: "
             f"<span style='color:{score_color};'>{text}</span></html>"
         )
         self.analysis_score_label.setStyleSheet("""
@@ -980,6 +995,9 @@ class MainWindow(QMainWindow):
                 f.write(f'[Red "{self.settings["red_player"].value}"]\n')
                 f.write(f'[Black "{self.settings["black_player"].value}"]\n')
                 
+                if self.settings.get('pgn_format') == 'ICCS':
+                     f.write('[Format "ICCS"]\n')
+                
                 result = "*"
                 if self.board.is_checkmate():
                     result = "0-1" if self.board.current_side == Side.RED else "1-0"
@@ -991,20 +1009,26 @@ class MainWindow(QMainWindow):
                 temp_board = ChessBoard()
                 line = ""
                 
+                use_iccs = self.settings.get('pgn_format') == 'ICCS'
+
                 for i, move in enumerate(self.board.move_history):
                     move_num = i // 2 + 1
                     
-                    # Generate chinese
-                    if i < len(self.board.position_history):
-                        temp_board.board = self.board.position_history[i]
-                        chinese = self.board.move_to_chinese(move, temp_board)
+                    if use_iccs:
+                        move_str = self.board.move_to_iccs(move)
                     else:
-                        chinese = move
+                        # Generate chinese
+                        if i < len(self.board.position_history):
+                            temp_board.board = self.board.position_history[i]
+                            move_str = self.board.move_to_chinese(move, temp_board)
+                        else:
+                            # Should not happen usually given we have history, but fallback
+                            move_str = move
                     
                     if i % 2 == 0:
-                        line += f"{move_num}. {chinese} "
+                        line += f"{move_num}. {move_str} "
                     else:
-                        line += f"{chinese} "
+                        line += f"{move_str} "
                         
                     if len(line) > 80:
                         f.write(line + "\n")
@@ -1046,6 +1070,10 @@ class MainWindow(QMainWindow):
                 
                 # Try Chinese
                 uci_move = self.board.chinese_to_move(move_str)
+                
+                if not uci_move:
+                    # Try ICCS
+                    uci_move = self.board.iccs_to_move(move_str)
                 
                 if not uci_move:
                     # Try UCI
@@ -1148,6 +1176,10 @@ class MainWindow(QMainWindow):
     
     def _on_engine_ready(self):
         """Called when engine is ready"""
+        # Prevent handling if in analysis mode
+        if hasattr(self, '_analysis_mode') and self._analysis_mode:
+            return
+
         # Apply settings
         if 'threads' in self.settings:
             self.engine.set_option('Threads', self.settings['threads'])

@@ -43,8 +43,8 @@ class AnalysisChart(QWidget):
         # Setup
         # Setup
         self.setMinimumWidth(150)
-        self.setMaximumWidth(250)
-        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+        # self.setMaximumWidth(250)  # Removed to match move history width
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         
         # Enable mouse tracking for hover effects
         self.setMouseTracking(True)

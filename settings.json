@@ -2,5 +2,8 @@
     "red_player": "玩家",
     "black_player": "玩家",
     "engine_path": "./Linux/pikafish-avx2",
-    "think_time": 1000
+    "think_time": 0,
+    "depth": 32,
+    "threads": 8,
+    "pgn_format": "ICCS"
 }

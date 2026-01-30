@@ -806,3 +806,23 @@ class ChessBoard:
                  return move
                  
         return None
+
+    def move_to_iccs(self, move: str) -> str:
+        """Convert UCI move to ICCS notation (e.g. c3c4 -> C3-C4)"""
+        if len(move) == 4:
+            return f"{move[0].upper()}{move[1]}-{move[2].upper()}{move[3]}"
+        return move
+
+    def iccs_to_move(self, text: str) -> str | None:
+        """Convert ICCS notation to UCI move (e.g. C3-C4 -> c3c4)"""
+        if not text:
+            return None
+            
+        clean_text = text.replace("-", "").lower()
+        if len(clean_text) == 4:
+             if 'a' <= clean_text[0] <= 'i' and \
+                '0' <= clean_text[1] <= '9' and \
+                'a' <= clean_text[2] <= 'i' and \
+                '0' <= clean_text[3] <= '9':
+                 return clean_text
+        return None

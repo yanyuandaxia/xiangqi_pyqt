@@ -2,6 +2,8 @@
 
 ![图标](xiangqi_pyqt.png)
 
+![界面截图](program.png)
+
 一个基于 PyQt5 开发的中国象棋图形界面程序，可使用 [皮卡鱼 (Pikafish)](https://github.com/official-pikafish/Pikafish) 或其他支持UCI协议的引擎。
 
 ## 功能特性
@@ -70,6 +72,27 @@ pip install PyQt5
 python main.py
 ```
 
+### 打包说明
+
+使用 PyInstaller 进行打包：
+
+> **注意**：打包前请确保已下载 [Pikafish](https://github.com/official-pikafish/Pikafish/releases) 引擎，并将 `pikafish.nnue` 文件解压到项目根目录。如果您还需要打包引擎可执行文件，请相应修改打包命令。
+
+**Linux:**
+```bash
+pyinstaller xiangqi.spec
+```
+
+**MacOS:**
+```bash
+pyinstaller --clean --windowed --name "Xiangqi" --add-data "*.png:." --add-data "*.nnue:." main.py
+```
+
+**Windows:**
+```powershell
+pyinstaller --clean --noconsole --name "Xiangqi" --add-data "xiangi_pyqt.png;." --add-data "pikafish.nnue;." main.py
+```
+
 ### 游戏与引擎设置
 
 1. **引擎路径**：选择 UCI 协议引擎的可执行文件（如 Pikafish）
@@ -91,6 +114,8 @@ python main.py
 | `chess_logic.py`  | 象棋规则与走法验证 |
 | `move_history.py` | 走法记录组件       |
 | `uci_engine.py`   | UCI 引擎通信接口   |
+| `analysis_chart.py` | 局势分析图表组件 |
+| `win_rate_bar.py` | 胜率条组件 |
 | `settings.json`   | 用户设置配置文件   |
 
 ## 操作说明
