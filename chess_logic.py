@@ -81,6 +81,7 @@ class ChessBoard:
         self.move_history: list[str] = []
         self.position_history: list[list[list[Optional[Piece]]]] = []
         self.check_history: list[tuple[str, bool]] = []  # (position_key, is_check) for perpetual check detection
+        self.position_key_history: list[str] = []  # position keys for repetition detection
         self.halfmove_clock: int = 0
         self.fullmove_number: int = 1
         
@@ -94,6 +95,7 @@ class ChessBoard:
         new_board.move_history = self.move_history.copy()
         new_board.position_history = []
         new_board.check_history = self.check_history.copy()
+        new_board.position_key_history = self.position_key_history.copy()
         new_board.halfmove_clock = self.halfmove_clock
         new_board.fullmove_number = self.fullmove_number
         return new_board
@@ -109,6 +111,7 @@ class ChessBoard:
         self.move_history = []
         self.position_history = []
         self.check_history = []
+        self.position_key_history = []
         
         # Parse piece placement
         ranks = parts[0].split('/')
@@ -542,6 +545,7 @@ class ChessBoard:
         pos_key = self._get_position_key()
         is_check = self._is_king_in_check(self.current_side)
         self.check_history.append((pos_key, is_check))
+        self.position_key_history.append(pos_key)
         
         return True
     
@@ -556,6 +560,8 @@ class ChessBoard:
         # Also remove the check history entry for this move
         if self.check_history:
             self.check_history.pop()
+        if self.position_key_history:
+            self.position_key_history.pop()
         
         self.current_side = Side.BLACK if self.current_side == Side.RED else Side.RED
         
@@ -600,13 +606,13 @@ class ChessBoard:
     
     def is_threefold_repetition(self) -> bool:
         """Check if the same position has occurred 3 times (三次同形重复)"""
-        if len(self.check_history) < 5:  # Need at least 5 positions for 3 repetitions
+        if len(self.position_key_history) < 3:
             return False
         
         current_key = self._get_position_key()
         count = 0
         
-        for pos_key, _ in self.check_history:
+        for pos_key in self.position_key_history:
             if pos_key == current_key:
                 count += 1
                 if count >= 3:

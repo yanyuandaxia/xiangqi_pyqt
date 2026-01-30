@@ -15,9 +15,9 @@ from PyQt5.QtWidgets import (
     QFileDialog, QMessageBox, QDialog, QLabel, 
     QComboBox, QPushButton, QSpinBox, QGroupBox,
     QFormLayout, QDialogButtonBox, QGridLayout, QButtonGroup,
-    QRadioButton, QFrame, QInputDialog
+    QRadioButton, QFrame, QInputDialog, QSizePolicy
 )
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QIcon, QFont
 
 from chess_logic import ChessBoard, Side, STARTING_FEN, Piece, PieceType
@@ -154,6 +154,81 @@ class SettingsDialog(QDialog):
             self.threads.setValue(settings['threads'])
         if 'pgn_format' in settings:
             self.pgn_format.setCurrentIndex(1 if settings['pgn_format'] == 'ICCS' else 0)
+
+
+class AnalysisOptionsDialog(QDialog):
+    """Dialog for choosing analysis mode and managing analysis results"""
+
+    load_clicked = pyqtSignal()
+    save_clicked = pyqtSignal()
+
+    def __init__(self, realtime_enabled: bool, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("分析选项")
+        self.setMinimumWidth(320)
+
+        layout = QVBoxLayout(self)
+
+        mode_group = QGroupBox("分析模式")
+        mode_layout = QVBoxLayout()
+        self.realtime_radio = QRadioButton("实时分析")
+        self.record_radio = QRadioButton("分析对局记录")
+        mode_layout.addWidget(self.realtime_radio)
+        mode_layout.addWidget(self.record_radio)
+        mode_group.setLayout(mode_layout)
+        layout.addWidget(mode_group)
+
+        if realtime_enabled:
+            self.realtime_radio.setChecked(True)
+        else:
+            self.record_radio.setChecked(True)
+
+        action_group = QGroupBox("分析结果")
+        action_layout = QHBoxLayout()
+        self.load_btn = QPushButton("读取结果")
+        self.save_btn = QPushButton("存储结果")
+        action_layout.addWidget(self.load_btn)
+        action_layout.addWidget(self.save_btn)
+        action_group.setLayout(action_layout)
+        layout.addWidget(action_group)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Ok).setText("开始")
+        buttons.button(QDialogButtonBox.Cancel).setText("取消")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+        self.load_btn.clicked.connect(self.load_clicked.emit)
+        self.save_btn.clicked.connect(self.save_clicked.emit)
+
+    def is_realtime_selected(self) -> bool:
+        return self.realtime_radio.isChecked()
+
+
+class PgnDialog(QDialog):
+    """Dialog for PGN actions"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("棋谱")
+        self.setMinimumWidth(240)
+
+        layout = QVBoxLayout(self)
+
+        action_group = QGroupBox("棋谱操作")
+        action_layout = QHBoxLayout()
+        self.open_btn = QPushButton("打开")
+        self.save_btn = QPushButton("保存")
+        action_layout.addWidget(self.open_btn)
+        action_layout.addWidget(self.save_btn)
+        action_group.setLayout(action_layout)
+        layout.addWidget(action_group)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.rejected.connect(self.reject)
+        buttons.accepted.connect(self.accept)
+        layout.addWidget(buttons)
 
 
 class BoardEditorDialog(QDialog):
@@ -425,6 +500,27 @@ class MainWindow(QMainWindow):
         # Redo stack (list of UCI move strings)
         self.redo_stack = []
 
+        # Analysis state
+        self._analysis_mode = False
+        self._analysis_scores = []
+        self._analysis_positions = []
+        self._analysis_current_index = 0
+
+        # Realtime analysis state
+        self._realtime_analysis_enabled = False
+        self._realtime_analysis_active = False
+        self._realtime_pending = []
+        self._realtime_last_score = 0
+
+        # Pending move navigation while engine is thinking
+        self._pending_goto_move = None
+
+        # Suppress engine auto-move after history navigation
+        self._suppress_engine_turn = False
+
+        # Last PV text (Chinese)
+        self._last_pv_text = ""
+
         self._setup_ui()
         # self._setup_menu()  # Menu bar disabled
         self._setup_toolbar()
@@ -496,24 +592,40 @@ class MainWindow(QMainWindow):
         # Move history and analysis chart in horizontal layout
         history_chart_layout = QHBoxLayout()
         
-        # Move history
+        # Move history + PV
+        move_history_layout = QVBoxLayout()
+
         self.move_history = MoveHistoryWidget()
         self.move_history.move_selected.connect(self._goto_move)
-        history_chart_layout.addWidget(self.move_history, stretch=1)
+        move_history_layout.addWidget(self.move_history, stretch=1)
+
+        self.pv_label = QLabel("")
+        self.pv_label.setWordWrap(True)
+        self.pv_label.setStyleSheet("""
+            QLabel {
+                padding: 8px;
+                background-color: #f8f8f8;
+                border-radius: 5px;
+                font-size: 12px;
+                color: #333;
+            }
+        """)
+        move_history_layout.addWidget(self.pv_label)
+
+        history_chart_layout.addLayout(move_history_layout, stretch=1)
         
-        # Analysis chart (hidden by default)
+        # Analysis chart + score (stacked)
+        analysis_layout = QVBoxLayout()
+
         self.analysis_chart = AnalysisChart()
         self.analysis_chart.point_clicked.connect(self._goto_move)
         self.analysis_chart.score_updated.connect(self._on_analysis_score_update)
-        self.analysis_chart.hide()  # Hidden until analysis is run
-        history_chart_layout.addWidget(self.analysis_chart, stretch=1)
+        self.analysis_chart.show()
+        analysis_layout.addWidget(self.analysis_chart, stretch=1)
         
         side_panel.addLayout(history_chart_layout, stretch=1)
         
-        # Info row: Engine info and analysis score side by side
-        info_row = QHBoxLayout()
-        
-        # Engine info
+        # Engine info (not shown in UI, kept for internal updates)
         self.engine_info_label = QLabel("引擎: 未连接")
         self.engine_info_label.setWordWrap(True)
         self.engine_info_label.setStyleSheet("""
@@ -524,9 +636,9 @@ class MainWindow(QMainWindow):
                 font-size: 12px;
             }
         """)
-        info_row.addWidget(self.engine_info_label, stretch=1)
-        
-        # Analysis score label (visible when analysis chart is shown)
+        self.engine_info_label.hide()
+
+        # Analysis score label (under chart)
         self.analysis_score_label = QLabel("")
         self.analysis_score_label.setWordWrap(True)
         self.analysis_score_label.setStyleSheet("""
@@ -537,10 +649,10 @@ class MainWindow(QMainWindow):
                 font-size: 12px;
             }
         """)
-        self.analysis_score_label.hide()  # Hidden by default
-        info_row.addWidget(self.analysis_score_label)
-        
-        side_panel.addLayout(info_row)
+        self.analysis_score_label.show()
+        analysis_layout.addWidget(self.analysis_score_label)
+
+        history_chart_layout.addLayout(analysis_layout, stretch=1)
         
         # Game controls
         controls_layout = QGridLayout()
@@ -671,20 +783,14 @@ class MainWindow(QMainWindow):
         
         toolbar.addSeparator()
 
-        open_btn = QAction("打开", self)
-        open_btn.triggered.connect(self._import_pgn)
-        toolbar.addAction(open_btn)
-
-        toolbar.addSeparator()
-
-        save_btn = QAction("保存", self)
-        save_btn.triggered.connect(self._export_pgn)
-        toolbar.addAction(save_btn)
+        pgn_btn = QAction("棋谱", self)
+        pgn_btn.triggered.connect(self._show_pgn_dialog)
+        toolbar.addAction(pgn_btn)
         
         toolbar.addSeparator()
         
         analyze_btn = QAction("分析", self)
-        analyze_btn.triggered.connect(self._start_analysis)
+        analyze_btn.triggered.connect(self._show_analysis_dialog)
         toolbar.addAction(analyze_btn)
         
         toolbar.addSeparator()
@@ -712,6 +818,12 @@ class MainWindow(QMainWindow):
         
         self.turn_label = QLabel()
         self.statusbar.addWidget(self.turn_label)
+
+        self.engine_status_label = QLabel("引擎：未连接")
+        self.engine_status_label.setStyleSheet("color: #444;")
+        self.engine_status_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.engine_status_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.statusbar.addWidget(self.engine_status_label, stretch=1)
         
         self.status_label = QLabel()
         self.statusbar.addPermanentWidget(self.status_label)
@@ -732,12 +844,17 @@ class MainWindow(QMainWindow):
         elif self.board.is_draw():
             can_draw, reason = self.board.can_claim_draw()
             self.status_label.setText(f"和棋 ({reason})")
-        elif self.engine.is_thinking and not self.hint_mode:
-            self.status_label.setText("引擎思考中...")
+        # elif self.engine.is_thinking and not self.hint_mode:
+        #     self.status_label.setText("引擎思考中...")
         elif self.hint_mode:
             self.status_label.setText("正在获取提示...")
         else:
             self.status_label.setText("")
+
+    def _set_engine_status(self, text: str):
+        """Set engine status text on status bar"""
+        if hasattr(self, 'engine_status_label'):
+            self.engine_status_label.setText(text)
     
     def _new_game(self):
         """Start a new game"""
@@ -754,8 +871,17 @@ class MainWindow(QMainWindow):
         
         # Clear and hide analysis chart
         self.analysis_chart.clear()
-        self.analysis_chart.hide()
-        self.analysis_score_label.hide()
+        self.analysis_chart.show()
+        self.analysis_score_label.show()
+
+        # Reset analysis data
+        self._analysis_scores = []
+        self._analysis_positions = []
+        self._analysis_current_index = 0
+        self._analysis_mode = False
+        self._realtime_pending = []
+        self._realtime_analysis_active = False
+        self._suppress_engine_turn = False
         
         if self.engine.is_ready:
             self.engine.new_game()
@@ -845,6 +971,8 @@ class MainWindow(QMainWindow):
         else:
              self.move_history.highlight_move(-1) # Clear selection
              self.board_widget.last_move = None
+        
+        
              
     def _goto_move(self, move_index: int):
         """Jump to a specific move"""
@@ -853,10 +981,14 @@ class MainWindow(QMainWindow):
         
         if target_len == current_len:
             return
-            
-        # Stop engine
+
+        # If engine is thinking, defer navigation to avoid affecting engine result
         if self.engine.is_thinking:
-            self.engine.stop_thinking()
+            self._pending_goto_move = move_index
+            return
+
+        # Suppress engine auto-move after navigating history
+        self._suppress_engine_turn = True
             
         if target_len < current_len:
             # Backward jump
@@ -939,6 +1071,8 @@ class MainWindow(QMainWindow):
                 self.redo_stack.append(move)
             else:
                 self.redo_stack.clear()
+
+            self._prune_analysis_after_current()
                 
             self.board_widget.set_board(self.board)
             self.board_widget.hint_move = None
@@ -989,6 +1123,16 @@ class MainWindow(QMainWindow):
         # Stop engine if thinking
         if self.engine.is_thinking:
             self.engine.stop_thinking()
+
+        # Clear analysis display when entering editor
+        self.analysis_chart.clear()
+        self.analysis_chart.show()
+        self.analysis_score_label.show()
+        self._analysis_scores = []
+        self._analysis_positions = []
+        self._analysis_current_index = 0
+        self._analysis_mode = False
+        self._cancel_realtime_analysis()
         
         # Save current board state in case of cancel
         import copy
@@ -1058,57 +1202,62 @@ class MainWindow(QMainWindow):
             
         try:
             with open(file_path, 'w', encoding='utf-8') as f:
-                # Headers
-                f.write('[Game "Xiangqi"]\n')
-                f.write(f'[Date "{datetime.date.today().strftime("%Y.%m.%d")}"]\n')
-                f.write(f'[Red "{self.settings["red_player"].value}"]\n')
-                f.write(f'[Black "{self.settings["black_player"].value}"]\n')
-                
-                if self.settings.get('pgn_format') == 'ICCS':
-                     f.write('[Format "ICCS"]\n')
-                
-                result = "*"
-                if self.board.is_checkmate():
-                    result = "0-1" if self.board.current_side == Side.RED else "1-0"
-                elif self.board.is_draw() or self.board.is_stalemate():
-                    result = "1/2-1/2"
-                f.write(f'[Result "{result}"]\n\n')
-                
-                # Moves
-                temp_board = ChessBoard()
-                line = ""
-                
-                use_iccs = self.settings.get('pgn_format') == 'ICCS'
-
-                for i, move in enumerate(self.board.move_history):
-                    move_num = i // 2 + 1
-                    
-                    if use_iccs:
-                        move_str = self.board.move_to_iccs(move)
-                    else:
-                        # Generate chinese
-                        if i < len(self.board.position_history):
-                            temp_board.board = self.board.position_history[i]
-                            move_str = self.board.move_to_chinese(move, temp_board)
-                        else:
-                            # Should not happen usually given we have history, but fallback
-                            move_str = move
-                    
-                    if i % 2 == 0:
-                        line += f"{move_num}. {move_str} "
-                    else:
-                        line += f"{move_str} "
-                        
-                    if len(line) > 80:
-                        f.write(line + "\n")
-                        line = ""
-                
-                if line:
-                    f.write(line + "\n")
+                f.write(self._build_pgn_text())
                     
             QMessageBox.information(self, "成功", "对局保存成功")
         except Exception as e:
             QMessageBox.critical(self, "错误", f"保存失败: {str(e)}")
+
+    def _build_pgn_text(self, pgn_format: str = None) -> str:
+        """Build PGN text for current game"""
+        if pgn_format is None:
+            pgn_format = self.settings.get('pgn_format')
+
+        lines = []
+        lines.append('[Game "Xiangqi"]')
+        lines.append(f'[Date "{datetime.date.today().strftime("%Y.%m.%d")}"]')
+        lines.append(f'[Red "{self.settings["red_player"].value}"]')
+        lines.append(f'[Black "{self.settings["black_player"].value}"]')
+        if pgn_format == 'ICCS':
+            lines.append('[Format "ICCS"]')
+
+        result = "*"
+        if self.board.is_checkmate():
+            result = "0-1" if self.board.current_side == Side.RED else "1-0"
+        elif self.board.is_draw() or self.board.is_stalemate():
+            result = "1/2-1/2"
+        lines.append(f'[Result "{result}"]')
+        lines.append("")
+
+        temp_board = ChessBoard()
+        line = ""
+        use_iccs = pgn_format == 'ICCS'
+
+        for i, move in enumerate(self.board.move_history):
+            move_num = i // 2 + 1
+
+            if use_iccs:
+                move_str = self.board.move_to_iccs(move)
+            else:
+                if i < len(self.board.position_history):
+                    temp_board.board = self.board.position_history[i]
+                    move_str = self.board.move_to_chinese(move, temp_board)
+                else:
+                    move_str = move
+
+            if i % 2 == 0:
+                line += f"{move_num}. {move_str} "
+            else:
+                line += f"{move_str} "
+
+            if len(line) > 80:
+                lines.append(line.rstrip())
+                line = ""
+
+        if line:
+            lines.append(line.rstrip())
+
+        return "\n".join(lines) + "\n"
 
     def _import_pgn(self):
         """Import game from PGN file"""
@@ -1196,6 +1345,253 @@ class MainWindow(QMainWindow):
             "软件仓库：https://github.com/yanyuandaxia/xiangqi_pyqt\n"
             "作者：yanyuandaxia"
         )
+
+    def _show_analysis_dialog(self):
+        """Show analysis options dialog"""
+        dialog = AnalysisOptionsDialog(self._realtime_analysis_enabled, self)
+        dialog.load_clicked.connect(self._load_analysis_results)
+        dialog.save_clicked.connect(self._save_analysis_results)
+
+        if dialog.exec_() == QDialog.Accepted:
+            if dialog.is_realtime_selected():
+                self._enable_realtime_analysis()
+            else:
+                self._disable_realtime_analysis()
+                self._start_analysis()
+
+    def _show_pgn_dialog(self):
+        """Show PGN dialog"""
+        dialog = PgnDialog(self)
+        dialog.open_btn.clicked.connect(self._import_pgn)
+        dialog.save_btn.clicked.connect(self._export_pgn)
+        dialog.exec_()
+
+    def _enable_realtime_analysis(self):
+        """Enable realtime analysis mode"""
+        if not self.engine.is_ready:
+            QMessageBox.information(self, "提示", "引擎未连接，无法进行实时分析")
+            return
+
+        self._realtime_analysis_enabled = True
+        self.analysis_chart.show()
+        self.analysis_score_label.show()
+        self.engine_info_label.setText("实时分析已开启")
+
+        # Try to analyze the current position immediately if possible
+        self._queue_realtime_analysis()
+
+    def _disable_realtime_analysis(self):
+        """Disable realtime analysis mode"""
+        self._realtime_analysis_enabled = False
+        self._cancel_realtime_analysis()
+
+    def _queue_realtime_analysis(self):
+        """Queue realtime analysis for the current position"""
+        if not self._realtime_analysis_enabled:
+            return
+        if self._analysis_mode:
+            return
+        if not self.engine.is_ready:
+            return
+        if not self.board.move_history:
+            return
+
+        move_index = len(self.board.move_history) - 1
+        fen = self.board.to_fen()
+
+        # If engine is busy or we're in hint mode, just store as pending
+        # Avoid duplicate queue for the same move
+        if self._realtime_pending and self._realtime_pending[-1][1] == move_index:
+            return
+
+        self._realtime_pending.append((fen, move_index))
+
+        if self.engine.is_thinking or self.hint_mode or self._realtime_analysis_active:
+            return
+
+        self._try_start_realtime_analysis()
+
+    def _try_start_realtime_analysis(self):
+        """Start realtime analysis if there is a pending request"""
+        if not self._realtime_analysis_enabled:
+            return
+        if self._analysis_mode:
+            return
+        if self.engine.is_thinking or self.hint_mode or self._realtime_analysis_active:
+            return
+        if not self._realtime_pending:
+            return
+
+        fen, move_index = self._realtime_pending.pop(0)
+
+        params = self._get_engine_go_params()
+        if params is None:
+            QMessageBox.warning(self, "错误", "思考时间和深度不能同时为0")
+            return
+
+        self._realtime_analysis_active = True
+        self._realtime_move_index = move_index
+
+        # Save original callbacks
+        self._realtime_original_on_bestmove = self.engine.on_bestmove
+        self._realtime_original_on_info = self.engine.on_info
+
+        self.engine.on_bestmove = self._on_realtime_bestmove
+        self.engine.on_info = self._on_realtime_info
+
+        self.engine.set_position(fen=fen)
+        self.engine.go(**params)
+
+    def _on_realtime_info(self, info: EngineInfo):
+        """Handle engine info during realtime analysis"""
+        if self._realtime_analysis_active:
+            self._realtime_last_score = info.score
+
+    def _on_realtime_bestmove(self, move: str):
+        """Handle bestmove during realtime analysis"""
+        if not self._realtime_analysis_active:
+            return
+
+        score = getattr(self, '_realtime_last_score', 0)
+        move_index = getattr(self, '_realtime_move_index', 0)
+        score = self._normalize_analysis_score(score, move_index)
+        self._set_analysis_score(move_index, score)
+
+        self._finish_realtime_analysis()
+
+    def _finish_realtime_analysis(self):
+        """Finish realtime analysis and restore callbacks"""
+        self._realtime_analysis_active = False
+
+        if hasattr(self, '_realtime_original_on_bestmove'):
+            self.engine.on_bestmove = self._realtime_original_on_bestmove
+        if hasattr(self, '_realtime_original_on_info'):
+            self.engine.on_info = self._realtime_original_on_info
+
+        # If another analysis is pending, start it
+        if self._realtime_pending:
+            QTimer.singleShot(50, self._try_start_realtime_analysis)
+
+    def _cancel_realtime_analysis(self):
+        """Cancel realtime analysis if running"""
+        if self._realtime_analysis_active and self.engine.is_thinking:
+            self.engine.stop_thinking()
+
+        if hasattr(self, '_realtime_original_on_bestmove'):
+            self.engine.on_bestmove = self._realtime_original_on_bestmove
+        if hasattr(self, '_realtime_original_on_info'):
+            self.engine.on_info = self._realtime_original_on_info
+
+        self._realtime_analysis_active = False
+        self._realtime_pending = []
+
+    def _normalize_analysis_score(self, score: int, move_index: int) -> int:
+        """Normalize score so positive means red advantage"""
+        if move_index % 2 == 0:
+            return -score
+        return score
+
+    def _set_analysis_score(self, move_index: int, score: int):
+        """Set analysis score for a specific move index"""
+        if move_index < 0:
+            return
+
+        if move_index >= len(self._analysis_scores):
+            missing = move_index - len(self._analysis_scores) + 1
+            self._analysis_scores.extend([0] * missing)
+
+        self._analysis_scores[move_index] = score
+        self.analysis_chart.set_scores(self._analysis_scores)
+        self.analysis_chart.show()
+        self.analysis_score_label.show()
+
+        current_index = len(self.board.move_history) - 1
+        if current_index >= 0:
+            self.analysis_chart.highlight_move(current_index)
+
+    def _save_analysis_results(self):
+        """Save analysis results to a JSON file"""
+        if not self._analysis_scores:
+            QMessageBox.information(self, "提示", "没有可存储的分析结果")
+            return
+
+        default_name = f"analysis_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.analysis.json"
+        default_path = os.path.join(get_user_data_path(), default_name)
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "保存分析结果",
+            default_path,
+            "分析结果 (*.analysis.json);;JSON (*.json);;所有文件 (*)"
+        )
+        if not file_path:
+            return
+
+        data = {
+            "version": 1,
+            "created_at": datetime.datetime.now().isoformat(),
+            "moves": list(self.board.move_history),
+            "scores": list(self._analysis_scores),
+            "pgn_format": self.settings.get('pgn_format'),
+            "pgn": self._build_pgn_text()
+        }
+
+        try:
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=4)
+        except Exception as e:
+            QMessageBox.warning(self, "错误", f"存储分析结果失败: {str(e)}")
+
+    def _load_analysis_results(self):
+        """Load analysis results from a JSON file"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "读取分析结果",
+            get_user_data_path(),
+            "分析结果 (*.analysis.json);;JSON (*.json);;所有文件 (*)"
+        )
+        if not file_path:
+            return
+
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except Exception as e:
+            QMessageBox.warning(self, "错误", f"读取分析结果失败: {str(e)}")
+            return
+
+        scores = data.get("scores", [])
+        moves = data.get("moves", [])
+        if not isinstance(scores, list):
+            QMessageBox.warning(self, "错误", "分析结果格式不正确")
+            return
+
+        if moves and list(self.board.move_history) != list(moves):
+            result = QMessageBox.question(
+                self,
+                "提示",
+                "分析记录包含对局记录，是否加载该对局记录？",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes
+            )
+            if result == QMessageBox.Yes:
+                self._new_game()
+                for move in moves:
+                    if not self.board.make_move(move):
+                        QMessageBox.warning(self, "警告", f"对局记录中存在非法走法: {move}\n加载将提前结束。")
+                        break
+
+                self.board_widget.set_board(self.board)
+                self._rebuild_move_history_list()
+                self._update_status()
+
+        self._analysis_scores = scores
+        self.analysis_chart.set_scores(self._analysis_scores)
+        self.analysis_chart.show()
+        self.analysis_score_label.show()
+
+        current_index = len(self.board.move_history) - 1
+        if current_index >= 0:
+            self.analysis_chart.highlight_move(current_index)
             
     def load_settings(self):
         """Load settings from JSON file"""
@@ -1248,9 +1644,11 @@ class MainWindow(QMainWindow):
         
         if self.engine.start(actual_path):
             self.engine_info_label.setText("引擎: 正在初始化...")
+            self._set_engine_status("引擎：正在初始化")
         else:
             QMessageBox.warning(self, "错误", f"无法启动引擎:\n{actual_path}")
             self.engine_info_label.setText("引擎: 启动失败")
+            self._set_engine_status("引擎：启动失败")
     
     def _on_engine_ready(self):
         """Called when engine is ready"""
@@ -1266,6 +1664,7 @@ class MainWindow(QMainWindow):
         if self.showing_hint_result and self.hint_info_text:
             return
         self.engine_info_label.setText("引擎: 就绪")
+        self._set_engine_status("引擎：就绪")
         self.engine.new_game()
         self._check_engine_turn()
     
@@ -1273,8 +1672,12 @@ class MainWindow(QMainWindow):
         """Called when player makes a move"""
         # Disable interaction immediately to prevent double moves while checking turn
         self.board_widget.interaction_enabled = False
+
+        # Clear suppression after player makes a move
+        self._suppress_engine_turn = False
         
         self.redo_stack.clear() # Clear redo stack
+        self._prune_analysis_after_current()
         self.edited_position = False  # Reset edited position flag after a move
         
         # Clear hint when player makes a move
@@ -1288,6 +1691,9 @@ class MainWindow(QMainWindow):
         self._update_clock()
         self._check_game_result()
         self._check_engine_turn()
+
+        # Realtime analysis after a move
+        self._queue_realtime_analysis()
     
     def _get_chinese_move(self, move: str) -> str:
         """Convert UCI move to Chinese notation using position history"""
@@ -1298,6 +1704,25 @@ class MainWindow(QMainWindow):
         temp_board = ChessBoard()
         temp_board.board = self.board.position_history[-1]  # Last saved position
         return self.board.move_to_chinese(move, temp_board)
+
+    def _prune_analysis_after_current(self):
+        """Trim analysis scores when future moves are deleted"""
+        max_len = len(self.board.move_history)
+        if len(self._analysis_scores) > max_len:
+            self._analysis_scores = self._analysis_scores[:max_len]
+            self.analysis_chart.set_scores(self._analysis_scores)
+
+        # Remove queued realtime analysis beyond current move count
+        if self._realtime_pending:
+            self._realtime_pending = [
+                (fen, idx) for (fen, idx) in self._realtime_pending if idx < max_len
+            ]
+
+        # Cancel current realtime analysis if it targets a removed move
+        if self._realtime_analysis_active:
+            current_idx = getattr(self, '_realtime_move_index', -1)
+            if current_idx >= max_len:
+                self._cancel_realtime_analysis()
     
     def _check_engine_turn(self):
         """Check if it's engine's turn and start thinking"""
@@ -1309,6 +1734,9 @@ class MainWindow(QMainWindow):
         current_player = self.settings['red_player'] if self.board.current_side == Side.RED else self.settings['black_player']
         
         if current_player == PlayerType.ENGINE:
+            if self._suppress_engine_turn:
+                self.board_widget.interaction_enabled = True
+                return
             self.board_widget.interaction_enabled = False
             if self.engine.is_ready and not self.engine.is_thinking:
                 # 清除提示状态，因为轮到引擎走棋了
@@ -1377,6 +1805,9 @@ class MainWindow(QMainWindow):
             self.showing_hint_result = True
             self.hint_btn.setEnabled(True)
             self.hint_btn.setText("提示")
+
+            # Hint finished, update engine status
+            self._set_engine_status("引擎：就绪")
             
             coords = ChessBoard.parse_move(move)
             if coords:
@@ -1392,11 +1823,19 @@ class MainWindow(QMainWindow):
                 
                 self.hint_info_text = f"建议走法: {chinese_move}{score_info}"
                 self.engine_info_label.setText(self.hint_info_text)
+
+            # Show PV under move history
+            if hasattr(self, 'pv_label'):
+                if self._last_pv_text:
+                    self.pv_label.setText(f"主变: {self._last_pv_text}")
+                else:
+                    self.pv_label.setText("")
             return
         
         # Normal mode: execute the move
         if self.board.make_move(move):
             self.redo_stack.clear() # Clear redo stack
+            self._prune_analysis_after_current()
             self.edited_position = False  # Reset edited position flag after engine move
             self.board_widget.set_board(self.board)
             self.board_widget.set_last_move(move)
@@ -1418,9 +1857,19 @@ class MainWindow(QMainWindow):
             
             # Reset engine info label
             self.engine_info_label.setText("引擎: 就绪")
+            self._set_engine_status("引擎：就绪")
+
+            # Realtime analysis after engine move
+            self._queue_realtime_analysis()
             
             # Check if next turn is also engine
             QTimer.singleShot(100, self._check_engine_turn)
+
+            # Apply any pending navigation after engine finishes
+            if self._pending_goto_move is not None:
+                pending = self._pending_goto_move
+                self._pending_goto_move = None
+                QTimer.singleShot(0, lambda: self._goto_move(pending))
         else:
             # Move was rejected (likely due to perpetual check rule)
             # Try to find an alternative move from the candidate list
@@ -1436,6 +1885,7 @@ class MainWindow(QMainWindow):
                         self.engine_info_label.setText(f"走法 {move} 违反规则，改走 {alt_move}")
                         
                         self.redo_stack.clear()
+                        self._prune_analysis_after_current()
                         self.edited_position = False
                         self.board_widget.set_board(self.board)
                         self.board_widget.set_last_move(alt_move)
@@ -1448,8 +1898,15 @@ class MainWindow(QMainWindow):
                         self._update_status()
                         self._update_clock()
                         self._check_game_result()
+
+                        self._queue_realtime_analysis()
                         
                         QTimer.singleShot(100, self._check_engine_turn)
+
+                        if self._pending_goto_move is not None:
+                            pending = self._pending_goto_move
+                            self._pending_goto_move = None
+                            QTimer.singleShot(0, lambda: self._goto_move(pending))
                         break
             
             if not found_alternative:
@@ -1607,21 +2064,23 @@ class MainWindow(QMainWindow):
             # Swap win and loss for red's perspective
             self.win_rate_bar.set_wdl(loss, draw, win)
         
-        # 如果正在显示提示结果，保持提示信息不变
-        if self.showing_hint_result:
-            # 保持显示提示结果
-            if self.hint_info_text:
-                self.engine_info_label.setText(self.hint_info_text)
-            return
-        
+        lines = []
+        status_parts = ["引擎：思考中"]
+
         if info.nps > 0:
-            lines = [
+            lines.extend([
                 f"深度: {info.depth}",
                 f"分数: {score_str}",
                 f"速度: {info.nps // 1000}k 节点/秒"
-            ]
+            ])
+            status_parts.extend([
+                f"深度 {info.depth}",
+                f"分数 {score_str}",
+                f"速度 {info.nps // 1000}k"
+            ])
         else:
-            lines = []
+            lines.append(f"分数: {score_str}")
+            status_parts.append(f"分数 {score_str}")
             
         if info.pv:
             try:
@@ -1640,11 +2099,23 @@ class MainWindow(QMainWindow):
                 
                 pv_text = " ".join(chinese_pv)
                 lines.append(f"主变: {pv_text}")
+                status_parts.append(f"主变 {pv_text}")
+                self._last_pv_text = pv_text
             except Exception:
                 # Fallback to simple string if conversion fails（e.g. invalid PV）
                 pv_short = " ".join(info.pv.split()[:3])
                 lines.append(f"主变: {pv_short}")
-        
+                status_parts.append(f"主变 {pv_short}")
+                self._last_pv_text = pv_short
+
+        self._set_engine_status(" ".join(status_parts))
+
+        # 如果正在显示提示结果，保持提示信息不变
+        if self.showing_hint_result:
+            if self.hint_info_text:
+                self.engine_info_label.setText(self.hint_info_text)
+            return
+
         self.engine_info_label.setText("引擎:\n" + "\n".join(lines))
     
     def _start_analysis(self):
@@ -1660,6 +2131,9 @@ class MainWindow(QMainWindow):
         if not self.board.move_history and not self.redo_stack:
             QMessageBox.information(self, "提示", "没有可分析的走法")
             return
+
+        # Disable realtime analysis when running full game analysis
+        self._disable_realtime_analysis()
         
         # Stop any ongoing operations
         if self.engine.is_thinking:
@@ -1828,6 +2302,8 @@ class MainWindow(QMainWindow):
         # Cancel any ongoing analysis
         if hasattr(self, '_analysis_mode') and self._analysis_mode:
             self._cancel_analysis()
+
+        self._cancel_realtime_analysis()
         
         self.engine.stop()
         event.accept()
