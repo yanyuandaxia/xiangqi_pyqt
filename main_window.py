@@ -589,11 +589,14 @@ class MainWindow(QMainWindow):
         # Side panel
         side_panel = QVBoxLayout()
         
-        # Move history and analysis chart in horizontal layout
-        history_chart_layout = QHBoxLayout()
+        # Move history and analysis chart in horizontal splitter for equal sizing
+        from PyQt5.QtWidgets import QSplitter
+        history_chart_splitter = QSplitter(Qt.Horizontal)
         
-        # Move history + PV
-        move_history_layout = QVBoxLayout()
+        # Move history + PV (wrapped in a container widget)
+        move_history_container = QWidget()
+        move_history_layout = QVBoxLayout(move_history_container)
+        move_history_layout.setContentsMargins(0, 0, 0, 0)
 
         self.move_history = MoveHistoryWidget()
         self.move_history.move_selected.connect(self._goto_move)
@@ -612,18 +615,18 @@ class MainWindow(QMainWindow):
         """)
         move_history_layout.addWidget(self.pv_label)
 
-        history_chart_layout.addLayout(move_history_layout, stretch=1)
+        history_chart_splitter.addWidget(move_history_container)
         
-        # Analysis chart + score (stacked)
-        analysis_layout = QVBoxLayout()
+        # Analysis chart + score (wrapped in a container widget)
+        analysis_container = QWidget()
+        analysis_layout = QVBoxLayout(analysis_container)
+        analysis_layout.setContentsMargins(0, 0, 0, 0)
 
         self.analysis_chart = AnalysisChart()
         self.analysis_chart.point_clicked.connect(self._goto_move)
         self.analysis_chart.score_updated.connect(self._on_analysis_score_update)
         self.analysis_chart.show()
         analysis_layout.addWidget(self.analysis_chart, stretch=1)
-        
-        side_panel.addLayout(history_chart_layout, stretch=1)
         
         # Engine info (not shown in UI, kept for internal updates)
         self.engine_info_label = QLabel("引擎: 未连接")
@@ -652,7 +655,14 @@ class MainWindow(QMainWindow):
         self.analysis_score_label.show()
         analysis_layout.addWidget(self.analysis_score_label)
 
-        history_chart_layout.addLayout(analysis_layout, stretch=1)
+        history_chart_splitter.addWidget(analysis_container)
+        
+        # Set equal sizes for both panels
+        history_chart_splitter.setSizes([1, 1])
+        history_chart_splitter.setStretchFactor(0, 1)
+        history_chart_splitter.setStretchFactor(1, 1)
+        
+        side_panel.addWidget(history_chart_splitter, stretch=1)
         
         # Game controls
         controls_layout = QGridLayout()
@@ -2188,7 +2198,7 @@ class MainWindow(QMainWindow):
         self.analysis_score_label.show()
         
         # Update status
-        self.engine_info_label.setText(f"正在分析... (0/{len(self._analysis_positions)})")
+        self._set_engine_status(f"分析中 (0/{len(self._analysis_positions)})")
         
         # Start analyzing first position
         self._analyze_next_position()
@@ -2220,7 +2230,7 @@ class MainWindow(QMainWindow):
         # Update progress
         progress = self._analysis_current_index + 1
         total = len(self._analysis_positions)
-        self.engine_info_label.setText(f"正在分析... ({progress}/{total})")
+        self._set_engine_status(f"分析中 ({progress}/{total})")
     
     def _on_analysis_info(self, info: EngineInfo):
         """Handle engine info during analysis"""
@@ -2272,7 +2282,7 @@ class MainWindow(QMainWindow):
         
         # Update status
         total_moves = len(self._analysis_scores)
-        self.engine_info_label.setText(f"分析完成: {total_moves} 步已分析")
+        self._set_engine_status(f"分析完成: {total_moves} 步")
         
         # Highlight current move in chart
         current_index = len(self.board.move_history) - 1

@@ -130,6 +130,13 @@ class _AnalysisChartCanvas(QWidget):
         
         self.setMinimumHeight(100)
         self.setMouseTracking(True)
+        # Add border to match QListWidget's default styling
+        self.setStyleSheet("""
+            _AnalysisChartCanvas {
+                border: 1px solid #c0c0c0;
+                background-color: #fafafa;
+            }
+        """)
     
     def set_scores(self, scores: list):
         """Set the scores to display"""

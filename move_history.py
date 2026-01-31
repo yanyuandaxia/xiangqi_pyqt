@@ -5,7 +5,7 @@ Displays and allows navigation through move history
 """
 
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QListWidget, QListWidgetItem, QLabel
-from PyQt5.QtCore import pyqtSignal
+from PyQt5.QtCore import pyqtSignal, Qt
 from PyQt5.QtGui import QColor, QBrush
 
 
@@ -23,7 +23,14 @@ class MoveHistoryWidget(QWidget):
         
         # Title
         title = QLabel("对局记录")
-        title.setStyleSheet("font-weight: bold; font-size: 14px;")
+        title.setAlignment(Qt.AlignCenter)
+        title.setStyleSheet("""
+            QLabel {
+                font-weight: bold;
+                font-size: 14px;
+                color: #333;
+            }
+        """)
         layout.addWidget(title)
         
         # Move list
