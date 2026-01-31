@@ -150,6 +150,10 @@ class UCIEngine(QObject):
         if not line:
             return
         
+        # Debug: show engine output
+        if line.startswith("bestmove") or line.startswith("info depth"):
+            print(f"[ENGINE] {line[:80]}")
+        
         tokens = line.split()
         if not tokens:
             return
@@ -312,8 +316,8 @@ class UCIEngine(QObject):
     
     def stop_thinking(self):
         """Stop the current search"""
-        if self.is_thinking:
-            self._send_command("stop")
+        # Always send stop command to ensure engine stops, regardless of internal state
+        self._send_command("stop")
     
     def set_option(self, name: str, value: str):
         """Set engine option"""

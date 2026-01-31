@@ -1,9 +1,0 @@
-{
-    "red_player": "引擎",
-    "black_player": "玩家",
-    "engine_path": "./Linux/pikafish-avx2",
-    "think_time": 5000,
-    "depth": 0,
-    "threads": 16,
-    "pgn_format": "Chinese"
-}

@@ -1008,9 +1008,8 @@ class MainWindow(QMainWindow):
         if target_len == current_len:
             return
 
-        # If engine is thinking, defer navigation to avoid affecting engine result
+        # Block navigation while engine is thinking
         if self.engine.is_thinking:
-            self._pending_goto_move = move_index
             return
 
         # Suppress engine auto-move after navigating history
@@ -1088,8 +1087,9 @@ class MainWindow(QMainWindow):
 
     def _step_back(self, allow_redo=True):
         """Go to previous move"""
+        # Block while engine is thinking
         if self.engine.is_thinking:
-            self.engine.stop_thinking()
+            return
             
         move = self.board.undo_move()
         if move:
@@ -1109,6 +1109,10 @@ class MainWindow(QMainWindow):
 
     def _step_forward(self):
         """Go to next move"""
+        # Block while engine is thinking
+        if self.engine.is_thinking:
+            return
+            
         if not self.redo_stack:
             return
             
@@ -1126,6 +1130,10 @@ class MainWindow(QMainWindow):
 
     def _undo_move(self):
         """Undo the last move (smart undo)"""
+        # Block while engine is thinking
+        if self.engine.is_thinking:
+            return
+            
         # Undo one move
         self._step_back(allow_redo=False)
         
@@ -1425,6 +1433,8 @@ class MainWindow(QMainWindow):
 
     def _queue_realtime_analysis(self):
         """Queue realtime analysis for the current position"""
+        if self._suppress_engine_turn:
+            return
         if not self._realtime_analysis_enabled:
             return
         if self._analysis_mode:
@@ -1451,6 +1461,8 @@ class MainWindow(QMainWindow):
 
     def _try_start_realtime_analysis(self):
         """Start realtime analysis if there is a pending request"""
+        if self._suppress_engine_turn:
+            return
         if not self._realtime_analysis_enabled:
             return
         if self._analysis_mode:
@@ -1693,6 +1705,11 @@ class MainWindow(QMainWindow):
         # Prevent handling if in analysis mode
         if hasattr(self, '_analysis_mode') and self._analysis_mode:
             return
+        
+        # If engine was stopped, don't restart
+        if self._suppress_engine_turn:
+            self._set_engine_status("引擎：已停止")
+            return
 
         # Apply settings
         if 'threads' in self.settings:
@@ -1812,6 +1829,10 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "提示", "引擎未连接")
             return
         
+        if self._suppress_engine_turn:
+            QMessageBox.information(self, "提示", "引擎已停止，请点击开始后再请求提示")
+            return
+        
         if self.engine.is_thinking:
             QMessageBox.information(self, "提示", "引擎正在思考中...")
             return
@@ -1847,6 +1868,12 @@ class MainWindow(QMainWindow):
     
     def _on_engine_move(self, move: str):
         """Called when engine returns a move"""
+        # If engine was stopped, ignore this move
+        if self._suppress_engine_turn:
+            self._set_engine_status("引擎：已停止")
+            self.board_widget.interaction_enabled = True
+            return
+            
         if self.hint_mode:
             # Hint mode: display the move on board, don't execute
             self.hint_mode = False
@@ -2029,9 +2056,16 @@ class MainWindow(QMainWindow):
         # Set flag to suppress engine auto-turn (prevents engine vs engine from continuing)
         self._suppress_engine_turn = True
         
-        if self.engine.is_thinking:
-            self.engine.stop_thinking()
-            self._set_engine_status("引擎：已停止")
+        # Always try to stop engine thinking (unconditionally)
+        self.engine.stop_thinking()
+        self._set_engine_status("引擎：已停止")
+        
+        # Cancel hint mode
+        if self.hint_mode:
+            self.hint_mode = False
+            self.showing_hint_result = False
+            self.hint_info_text = ""
+            self.board_widget.hint_move = None
         
         # Also cancel any ongoing analysis
         if hasattr(self, '_analysis_mode') and self._analysis_mode:
@@ -2042,6 +2076,9 @@ class MainWindow(QMainWindow):
         
         # Enable board interaction so user can make moves
         self.board_widget.interaction_enabled = True
+        
+        # Update status to reflect stopped state
+        self._update_status()
     
     def _propose_draw(self):
         """Propose a draw"""
@@ -2115,6 +2152,10 @@ class MainWindow(QMainWindow):
     
     def _on_engine_info(self, info: EngineInfo):
         """Called when engine sends info"""
+        # If engine was stopped, ignore info messages
+        if self._suppress_engine_turn:
+            return
+            
         # If engine is not thinking, ignore info messages
         # This prevents delayed info packets from overwriting "Engine Ready" status
         if not self.engine.is_thinking:
