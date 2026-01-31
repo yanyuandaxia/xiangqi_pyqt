@@ -97,17 +97,7 @@ class SettingsDialog(QDialog):
         engine_group.setLayout(engine_layout)
         layout.addWidget(engine_group)
 
-        # General settings
-        general_group = QGroupBox("通用设置")
-        general_layout = QFormLayout()
 
-        self.pgn_format = QComboBox()
-        self.pgn_format.addItems(["中文纵线格式 (炮二平五)", "ICCS 坐标格式 (C2-E2)"])
-        general_layout.addRow("棋谱格式:", self.pgn_format)
-
-        general_group.setLayout(general_layout)
-        layout.addWidget(general_group)
-        
         # Buttons
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
@@ -134,7 +124,7 @@ class SettingsDialog(QDialog):
             'think_time': self.think_time.value(),
             'depth': self.depth.value(),
             'threads': self.threads.value(),
-            'pgn_format': 'ICCS' if self.pgn_format.currentIndex() == 1 else 'Chinese'
+            'threads': self.threads.value(),
         }
     
     def set_settings(self, settings: dict):
@@ -152,8 +142,7 @@ class SettingsDialog(QDialog):
             self.depth.setValue(settings['depth'])
         if 'threads' in settings:
             self.threads.setValue(settings['threads'])
-        if 'pgn_format' in settings:
-            self.pgn_format.setCurrentIndex(1 if settings['pgn_format'] == 'ICCS' else 0)
+
 
 
 class AnalysisOptionsDialog(QDialog):
@@ -223,12 +212,33 @@ class PgnDialog(QDialog):
         action_layout.addWidget(self.open_btn)
         action_layout.addWidget(self.save_btn)
         action_group.setLayout(action_layout)
+        action_group.setLayout(action_layout)
         layout.addWidget(action_group)
+        
+        # Format settings
+        format_group = QGroupBox("格式设置")
+        format_layout = QFormLayout()
+        
+        self.pgn_format = QComboBox()
+        self.pgn_format.addItems(["中文纵线格式 (炮二平五)", "ICCS 坐标格式 (C2-E2)"])
+        format_layout.addRow("棋谱格式:", self.pgn_format)
+        
+        format_group.setLayout(format_layout)
+        layout.addWidget(format_group)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
         buttons.rejected.connect(self.reject)
         buttons.accepted.connect(self.accept)
+        buttons.accepted.connect(self.accept)
         layout.addWidget(buttons)
+
+    def set_format(self, format_str: str):
+        """Set current PGN format"""
+        self.pgn_format.setCurrentIndex(1 if format_str == 'ICCS' else 0)
+
+    def get_format(self) -> str:
+        """Get selected PGN format"""
+        return 'ICCS' if self.pgn_format.currentIndex() == 1 else 'Chinese'
 
 
 class BoardEditorDialog(QDialog):
@@ -713,16 +723,18 @@ class MainWindow(QMainWindow):
         self.hint_btn.clicked.connect(self._request_hint)
         controls_layout.addWidget(self.hint_btn, 1, 1)
         
-        self.resign_btn = QPushButton("认输")
-        self.resign_btn.setStyleSheet(btn_style)
-        self.resign_btn.clicked.connect(self._resign_game)
-        controls_layout.addWidget(self.resign_btn, 2, 0)
+        # Start button - resumes engine thinking
+        self.start_btn = QPushButton("开始")
+        self.start_btn.setStyleSheet(btn_style)
+        self.start_btn.clicked.connect(self._resume_engine)
+        controls_layout.addWidget(self.start_btn, 2, 0)
         
-        # Draw button (moved to match user request)
-        self.draw_btn = QPushButton("提和")
-        self.draw_btn.setStyleSheet(btn_style)
-        self.draw_btn.clicked.connect(self._propose_draw)
-        controls_layout.addWidget(self.draw_btn, 2, 1)
+        
+        # Stop button - stops engine thinking
+        self.stop_btn = QPushButton("停止")
+        self.stop_btn.setStyleSheet(btn_style)
+        self.stop_btn.clicked.connect(self._stop_engine)
+        controls_layout.addWidget(self.stop_btn, 2, 1)
         
         side_panel.addLayout(controls_layout)
         
@@ -876,7 +888,7 @@ class MainWindow(QMainWindow):
         self.board_widget.hint_move = None
         self.edited_position = False  # Reset edited position flag
         
-        # Reset win rate bar
+        # Reset win rate bar to 50/50 for new game
         self.win_rate_bar.reset()
         
         # Clear and hide analysis chart
@@ -891,7 +903,11 @@ class MainWindow(QMainWindow):
         self._analysis_mode = False
         self._realtime_pending = []
         self._realtime_analysis_active = False
-        self._suppress_engine_turn = False
+        
+        # Check if both sides are engines - require manual start
+        both_engines = (self.settings['red_player'] == PlayerType.ENGINE and 
+                       self.settings['black_player'] == PlayerType.ENGINE)
+        self._suppress_engine_turn = both_engines
         
         if self.engine.is_ready:
             self.engine.new_game()
@@ -1130,7 +1146,8 @@ class MainWindow(QMainWindow):
     
     def _edit_board(self):
         """Open board editor"""
-        # Stop engine if thinking
+        # Stop engine if thinking and prevent auto-play
+        self._suppress_engine_turn = True
         if self.engine.is_thinking:
             self.engine.stop_thinking()
 
@@ -1372,8 +1389,19 @@ class MainWindow(QMainWindow):
     def _show_pgn_dialog(self):
         """Show PGN dialog"""
         dialog = PgnDialog(self)
+        
+        # Set current format
+        current_format = self.settings.get('pgn_format', 'Chinese')
+        dialog.set_format(current_format)
+        
+        # Connect signals
+        def update_format():
+            self.settings['pgn_format'] = dialog.get_format()
+            
+        dialog.pgn_format.currentIndexChanged.connect(update_format)
         dialog.open_btn.clicked.connect(self._import_pgn)
         dialog.save_btn.clicked.connect(self._export_pgn)
+        
         dialog.exec_()
 
     def _enable_realtime_analysis(self):
@@ -1676,6 +1704,13 @@ class MainWindow(QMainWindow):
         self.engine_info_label.setText("引擎: 就绪")
         self._set_engine_status("引擎：就绪")
         self.engine.new_game()
+        
+        # Check if both sides are engines - require manual start
+        both_engines = (self.settings['red_player'] == PlayerType.ENGINE and 
+                       self.settings['black_player'] == PlayerType.ENGINE)
+        if both_engines:
+            self._suppress_engine_turn = True
+        
         self._check_engine_turn()
     
     def _on_player_move(self, move: str):
@@ -1736,6 +1771,10 @@ class MainWindow(QMainWindow):
     
     def _check_engine_turn(self):
         """Check if it's engine's turn and start thinking"""
+        # Don't start engine if in edit mode
+        if self.board_widget.edit_mode:
+            return
+            
         # Check if game is over (checkmate, stalemate, or draw)
         if self._is_game_over():
             self.board_widget.interaction_enabled = False
@@ -1973,6 +2012,37 @@ class MainWindow(QMainWindow):
             if self.engine.is_thinking:
                 self.engine.stop_thinking()
     
+    def _resume_engine(self):
+        """Resume engine thinking after being stopped"""
+        # Clear the suppress flag to allow engine to think again
+        self._suppress_engine_turn = False
+        
+        # Check if game is over
+        if self._is_game_over():
+            return
+        
+        # Trigger engine turn check
+        self._check_engine_turn()
+    
+    def _stop_engine(self):
+        """Stop engine thinking and prevent auto-play in engine vs engine mode"""
+        # Set flag to suppress engine auto-turn (prevents engine vs engine from continuing)
+        self._suppress_engine_turn = True
+        
+        if self.engine.is_thinking:
+            self.engine.stop_thinking()
+            self._set_engine_status("引擎：已停止")
+        
+        # Also cancel any ongoing analysis
+        if hasattr(self, '_analysis_mode') and self._analysis_mode:
+            self._cancel_analysis()
+        
+        # Cancel realtime analysis if active
+        self._cancel_realtime_analysis()
+        
+        # Enable board interaction so user can make moves
+        self.board_widget.interaction_enabled = True
+    
     def _propose_draw(self):
         """Propose a draw"""
         # Check if game has already ended
@@ -2065,14 +2135,16 @@ class MainWindow(QMainWindow):
         # Update win rate bar based on engine WDL (Win/Draw/Loss) data
         # Note: WDL is from the perspective of the side to move
         # We need to convert it to red's perspective
-        win, draw, loss = info.wdl
-        if self.board.current_side == Side.RED:
-            # Red's view: win=red wins, loss=black wins
-            self.win_rate_bar.set_wdl(win, draw, loss)
-        else:
-            # Black's view: win=black wins, loss=red wins
-            # Swap win and loss for red's perspective
-            self.win_rate_bar.set_wdl(loss, draw, win)
+        # Only update if WDL data was actually parsed (not default values)
+        if info.wdl_valid:
+            win, draw, loss = info.wdl
+            if self.board.current_side == Side.RED:
+                # Red's view: win=red wins, loss=black wins
+                self.win_rate_bar.set_wdl(win, draw, loss)
+            else:
+                # Black's view: win=black wins, loss=red wins
+                # Swap win and loss for red's perspective
+                self.win_rate_bar.set_wdl(loss, draw, win)
         
         lines = []
         status_parts = ["引擎：思考中"]

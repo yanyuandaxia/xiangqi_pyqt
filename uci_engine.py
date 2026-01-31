@@ -26,6 +26,7 @@ class EngineInfo:
     time: int = 0
     # WDL (Win/Draw/Loss) in per mille (0-1000 each)
     wdl: tuple = (0, 1000, 0)  # Default to draw (0% win, 100% draw, 0% loss)
+    wdl_valid: bool = False  # True if WDL was actually parsed from engine output
 
 
 class UCIEngine(QObject):
@@ -220,6 +221,7 @@ class UCIEngine(QObject):
                     draw = int(tokens[i + 2])
                     loss = int(tokens[i + 3])
                     info.wdl = (win, draw, loss)
+                    info.wdl_valid = True
                 except ValueError:
                     pass
                 i += 4
