@@ -95,8 +95,8 @@ def get_default_engine_path() -> str:
     else:  # Linux and others
         engine_relative = 'Linux/pikafish-avx2'
     
+    # 1. Try platform-specific path
     engine_path = get_resource_path(engine_relative)
-    
     if os.path.exists(engine_path):
         # Ensure execute permission on Unix systems
         if sys.platform != 'win32':
@@ -108,6 +108,21 @@ def get_default_engine_path() -> str:
             except (OSError, PermissionError):
                 pass
         return engine_path
+        
+    # 2. Try root directory (pikafish or pikafish.exe)
+    root_names = ['pikafish.exe'] if sys.platform == 'win32' else ['pikafish']
+    for name in root_names:
+        engine_path = get_resource_path(name)
+        if os.path.exists(engine_path):
+            if sys.platform != 'win32':
+                try:
+                    import stat
+                    current_mode = os.stat(engine_path).st_mode
+                    if not (current_mode & stat.S_IXUSR):
+                        os.chmod(engine_path, current_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+                except (OSError, PermissionError):
+                    pass
+            return engine_path
     
     return ''
 
@@ -115,11 +130,6 @@ def get_default_engine_path() -> str:
 def get_engine_path(path: str) -> str:
     """
     Get the correct engine executable path.
-    
-    Handles both absolute paths and relative paths (like ./Linux/pikafish-avx2).
-    For bundled apps with relative paths, converts to resource path.
-    For bundled apps with absolute paths that don't exist, falls back to default engine.
-    Also ensures the engine has execute permission on Unix systems.
     
     Args:
         path: Engine path from settings (can be relative or absolute)
@@ -130,53 +140,38 @@ def get_engine_path(path: str) -> str:
     if not path:
         return get_default_engine_path()
     
-    engine_path = None
+    # If running in bundle, prefer the internal engine
+    # This handles the case where user had a path like "/usr/bin/pikafish" saved,
+    # but now runs the bundled version which has its own pikafish.
+    if is_bundled():
+        default_engine = get_default_engine_path()
+        if default_engine:
+            return default_engine
+    
+    # If not bundled (or internal engine not found which is weird for bundled),
+    # treat path normally
     
     # If it's an absolute path
     if os.path.isabs(path):
         if os.path.exists(path):
-            # Absolute path exists, use it directly
-            engine_path = path
-        elif is_bundled():
-            # In bundled app, absolute path doesn't exist
-            # Try to extract relative path and find in resources
-            # Common patterns: /path/to/project/Linux/pikafish-avx2
-            for platform_dir in ['Linux', 'Windows', 'MacOS']:
-                if platform_dir in path:
-                    # Extract the relative part starting from platform dir
-                    idx = path.find(platform_dir)
-                    relative_path = path[idx:]
-                    resource_path = get_resource_path(relative_path)
-                    if os.path.exists(resource_path):
-                        engine_path = resource_path
-                        break
-            
-            # If still not found, use default engine
-            if not engine_path:
-                engine_path = get_default_engine_path()
-        else:
-            # Not bundled and path doesn't exist
-            engine_path = path  # Return as-is, will fail at start
+            return path
+        # If absolute path doesn't exist, try default fallback
+        return get_default_engine_path()
     else:
         # It's a relative path
-        # Remove leading ./ if present
         clean_path = path.lstrip('./').lstrip('.\\')
+        engine_path = os.path.join(get_base_path(), clean_path)
         
-        if is_bundled():
-            # In bundled app, look in the resource directory
-            engine_path = get_resource_path(clean_path)
-        else:
-            # Running from source, resolve relative to base path
-            engine_path = os.path.join(get_base_path(), clean_path)
-    
-    # Ensure execute permission on Unix systems
-    if engine_path and os.path.exists(engine_path) and sys.platform != 'win32':
-        try:
-            import stat
-            current_mode = os.stat(engine_path).st_mode
-            if not (current_mode & stat.S_IXUSR):
-                os.chmod(engine_path, current_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-        except (OSError, PermissionError):
-            pass  # Ignore permission errors
-    
-    return engine_path if engine_path else ''
+        if os.path.exists(engine_path):
+            # chmod logic repeated here or assume user handles it for external relative paths
+             if sys.platform != 'win32':
+                try:
+                    import stat
+                    current_mode = os.stat(engine_path).st_mode
+                    if not (current_mode & stat.S_IXUSR):
+                        os.chmod(engine_path, current_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+                except (OSError, PermissionError):
+                    pass
+             return engine_path
+             
+        return get_default_engine_path()

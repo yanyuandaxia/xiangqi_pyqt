@@ -526,7 +526,8 @@ class MainWindow(QMainWindow):
         self._pending_goto_move = None
 
         # Suppress engine auto-move after history navigation
-        self._suppress_engine_turn = False
+        # Default to True so engine doesn't start thinking immediately upon launch
+        self._suppress_engine_turn = True
 
         # Last PV text (Chinese)
         self._last_pv_text = ""
@@ -724,14 +725,14 @@ class MainWindow(QMainWindow):
         controls_layout.addWidget(self.hint_btn, 1, 1)
         
         # Start button - resumes engine thinking
-        self.start_btn = QPushButton("开始")
+        self.start_btn = QPushButton("自动思考")
         self.start_btn.setStyleSheet(btn_style)
         self.start_btn.clicked.connect(self._resume_engine)
         controls_layout.addWidget(self.start_btn, 2, 0)
         
         
         # Stop button - stops engine thinking
-        self.stop_btn = QPushButton("停止")
+        self.stop_btn = QPushButton("停止思考")
         self.stop_btn.setStyleSheet(btn_style)
         self.stop_btn.clicked.connect(self._stop_engine)
         controls_layout.addWidget(self.stop_btn, 2, 1)
@@ -1256,6 +1257,25 @@ class MainWindow(QMainWindow):
         if pgn_format == 'ICCS':
             lines.append('[Format "ICCS"]')
 
+        # Determine initial FEN by backtracking
+        temp_board = self.board.copy()
+        # IMPORTANT: ChessBoard.copy() clears position_history by design (for validation performance),
+        # but we need it here for undo_move() to work correctly.
+        temp_board.position_history = self.board.position_history.copy()
+        
+        while temp_board.move_history:
+            # undo_move returns the move string if successful, None if failed
+            # If it fails (e.g. history mismatch), we must break to avoid infinite loop
+            if not temp_board.undo_move():
+                break
+                
+        initial_fen = temp_board.to_fen()
+        
+        from chess_logic import STARTING_FEN
+        if initial_fen != STARTING_FEN:
+            lines.append('[Setup "1"]')
+            lines.append(f'[FEN "{initial_fen}"]')
+
         result = "*"
         if self.board.is_checkmate():
             result = "0-1" if self.board.current_side == Side.RED else "1-0"
@@ -1308,13 +1328,32 @@ class MainWindow(QMainWindow):
                 content = f.read()
                 
             # Basic parsing
+            # Extract FEN if present
+            initial_fen = None
+            fen_match = re.search(r'\[FEN "(.*?)"\]', content)
+            if fen_match:
+                initial_fen = fen_match.group(1)
+            
+            # Basic parsing - remove headers but keep moves
             content = re.sub(r'\[.*?\]', '', content)
             content = re.sub(r'\{.*?\}', '', content)
             content = re.sub(r'\d+\.', '', content)
             
             moves = content.split()
             
-            self._new_game()
+            if initial_fen:
+                # Load initial position
+                self.board.load_fen(initial_fen)
+                # Reset UI state relevant to new game/position
+                self.board_widget.set_board(self.board)
+                self.move_history.clear() # Clear UI list
+                self.redo_stack.clear()
+                self._analysis_positions = []
+                self._analysis_scores = []
+                self.board_widget.last_move = None
+                self.board_widget.clear_selection()
+            else:
+                self._new_game()
             
             for move_str in moves:
                 move_str = move_str.strip()

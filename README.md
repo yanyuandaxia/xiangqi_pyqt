@@ -37,10 +37,16 @@
 
 ### 游戏控制
 
-- **认输**：主动认输结束对局
-- **提和**：提出和棋请求
+- **自动思考**：开始/恢复引擎自动走棋（尤其在停止或暂停后）
+- **停止思考**：强制停止引擎思考，并暂停后续的自动走棋
 - **和棋判定**：自动检测三次重复局面、六十回合无吃子等和棋条件
 - **将死/困毙检测**：自动判断胜负
+
+### 引擎控制
+
+- **启动行为**：程序启动时默认暂停引擎，需点击"自动思考"开始
+- **交互保护**：引擎思考期间无法执行悔棋、跳转等改变盘面的操作
+- **停止行为**：点击"停止思考"会立即终止引擎运算，并允许用户操作棋盘
 
 ### 引擎信息
 
@@ -89,24 +95,23 @@ python main.py
 
 ### 打包说明
 
-使用 PyInstaller 进行打包：
+使用 PyInstaller 将程序打包为单个可执行文件（包含引擎和资源文件）：
 
-> **注意**：打包前请确保已下载 [Pikafish](https://github.com/official-pikafish/Pikafish/releases) 引擎，并将 `pikafish.nnue` 文件解压到项目根目录。如果您还需要打包引擎可执行文件，请相应修改打包命令。
+**准备工作：**
+1. 确保已下载 [Pikafish](https://github.com/official-pikafish/Pikafish/releases) 引擎
+2. 将 `pikafish.nnue` 放在项目根目录
+3. 将引擎可执行文件放在以下位置之一（根据您的系统）：
+   - Linux: `Linux/pikafish-avx2` 或项目根目录下的 `pikafish`
+   - Windows: `Windows/pikafish-avx2.exe` 或项目根目录下的 `pikafish.exe`
+   - MacOS: `MacOS/pikafish-apple-silicon` 或项目根目录下的 `pikafish`
 
-**Linux:**
+**执行打包：**
+
 ```bash
 pyinstaller xiangqi.spec
 ```
 
-**MacOS:**
-```bash
-pyinstaller --clean --windowed --name "Xiangqi" --add-data "xiangqi_pyqt.png:." --add-data "pikafish.nnue:." main.py
-```
-
-**Windows:**
-```powershell
-pyinstaller --clean --noconsole --name "Xiangqi" --add-data "xiangqi_pyqt.png;." --add-data "pikafish.nnue;." main.py
-```
+打包成功后，可执行文件将生成在 `dist` 目录下。该文件是独立的，无需额外文件即可运行。
 
 ### 游戏与引擎设置
 
