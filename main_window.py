@@ -1869,7 +1869,7 @@ class MainWindow(QMainWindow):
             return
         
         if self._suppress_engine_turn:
-            QMessageBox.information(self, "提示", "引擎已停止，请点击开始后再请求提示")
+            QMessageBox.information(self, "提示", "引擎已停止，请点击“自动思考”后再请求提示")
             return
         
         if self.engine.is_thinking:
@@ -2082,6 +2082,7 @@ class MainWindow(QMainWindow):
         """Resume engine thinking after being stopped"""
         # Clear the suppress flag to allow engine to think again
         self._suppress_engine_turn = False
+        self._set_engine_status("引擎：就绪")
         
         # Check if game is over
         if self._is_game_over():
