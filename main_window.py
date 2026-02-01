@@ -1415,7 +1415,6 @@ class MainWindow(QMainWindow):
         """Show about dialog"""
         QMessageBox.about(self, "关于", 
             "软件名称：xiangqi_pyqt\n"
-            "软件版本：v1.0.1\n"
             "软件仓库：https://github.com/yanyuandaxia/xiangqi_pyqt\n"
             "作者：yanyuandaxia"
         )
