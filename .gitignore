@@ -1,9 +1,10 @@
-Linux/
-Windows/
-MacOS/
+# Linux/
+# Windows/
+# MacOS/
+# *.nnue
+
 .ssh/
 .vscode/
-*.nnue
 *.json
 
 # Byte-compiled / optimized / DLL files
