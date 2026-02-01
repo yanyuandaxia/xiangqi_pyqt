@@ -9,18 +9,18 @@ engine_bin = []
 if sys.platform == 'win32':
     if os.path.exists('Windows/pikafish-avx2.exe'):
         engine_bin = [('Windows/pikafish-avx2.exe', 'Windows')]
-    elif os.path.exists('pikafish.exe'):
-        engine_bin = [('pikafish.exe', '.')]
+    elif os.path.exists('pikafish_windows.exe'):
+        engine_bin = [('pikafish_windows.exe', '.')]
 elif sys.platform == 'darwin':
     if os.path.exists('MacOS/pikafish-apple-silicon'):
         engine_bin = [('MacOS/pikafish-apple-silicon', 'MacOS')]
-    elif os.path.exists('pikafish'):
-        engine_bin = [('pikafish', '.')]
+    elif os.path.exists('pikafish_macos'):
+        engine_bin = [('pikafish_macos', '.')]
 else: # Linux
     if os.path.exists('Linux/pikafish-avx2'):
         engine_bin = [('Linux/pikafish-avx2', 'Linux')]
-    elif os.path.exists('pikafish'):
-        engine_bin = [('pikafish', '.')]
+    elif os.path.exists('pikafish_linux.bin'):
+        engine_bin = [('pikafish_linux.bin', '.')]
 
 # Add nnue if exists
 datas = [('xiangqi_pyqt.png', '.')]

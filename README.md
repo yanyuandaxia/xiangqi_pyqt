@@ -112,7 +112,11 @@ pyinstaller xiangqi.spec
 ```
 
 打包成功后，可执行文件将生成在 `dist` 目录下。该文件是独立的，无需额外文件即可运行。
-
+(MacOS中可能需要运行
+```
+xattr -cr path/to/myapp-macos
+```
+以解除隔离)
 ### 游戏与引擎设置
 
 1. **引擎路径**：选择 UCI 协议引擎的可执行文件（如 Pikafish）
