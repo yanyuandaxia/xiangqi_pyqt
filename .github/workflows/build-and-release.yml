@@ -1,0 +1,70 @@
+name: Build and Release
+
+# 触发规则：仅当推送以 'v' 开头的标签时触发（例如 v1.0, v2.0.1）
+# 这样避免每次 commit 都打包，节省资源且逻辑更合理
+on:
+  push:
+    tags:
+      - 'v*'
+
+# 权限设置：允许 Action 创建 Release 和上传文件
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build packages
+    # 矩阵策略：同时在三个系统上运行打包任务
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            TARGET: linux
+            CMD_BUILD: >
+              pyinstaller -F -n myapp-linux main.py
+            OUT_FILE_NAME: myapp-linux
+            ASSET_MIME: application/octet-stream
+          - os: macos-latest
+            TARGET: macos
+            CMD_BUILD: >
+              pyinstaller -F -n myapp-macos main.py
+            OUT_FILE_NAME: myapp-macos
+            ASSET_MIME: application/octet-stream
+          - os: windows-latest
+            TARGET: windows
+            CMD_BUILD: >
+              pyinstaller -F -n myapp-windows main.py
+            OUT_FILE_NAME: myapp-windows.exe
+            ASSET_MIME: application/vnd.microsoft.portable-executable
+
+    steps:
+    # 1. 拉取代码
+    - uses: actions/checkout@v4
+
+    # 2. 设置 Python 环境
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11' # 根据你的项目需求修改版本
+
+    # 3. 安装依赖
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyqt5 pyinstaller
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+    # 4. 使用 PyInstaller 打包
+    # 注意：这里的 main.py 需要替换为你项目的入口文件名
+    - name: Build with PyInstaller
+      run: ${{ matrix.CMD_BUILD }}
+
+    # 5. 发布 Release 并上传附件
+    - name: Release
+      uses: softprops/action-gh-release@v1
+      if: startsWith(github.ref, 'refs/tags/')
+      with:
+        files: dist/${{ matrix.OUT_FILE_NAME }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
