@@ -4,7 +4,7 @@
 
 ![界面截图](program.png)
 
-一个基于 PyQt5 开发的中国象棋图形界面程序，可使用 [皮卡鱼 (Pikafish)](https://github.com/official-pikafish/Pikafish) 或其他支持UCI协议的引擎。
+一个基于 PyQt5 开发的多平台（Windows/Linux/MacOS）中国象棋图形界面程序，可使用 [皮卡鱼 (Pikafish)](https://github.com/official-pikafish/Pikafish) 或其他支持UCI协议的引擎。
 
 ## 功能特性
 
