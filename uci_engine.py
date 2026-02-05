@@ -89,6 +89,12 @@ class UCIEngine(QObject):
             # 设置工作目录为资源基础目录，以便引擎找到 NNUE 文件
             working_dir = get_base_path()
             
+            # Windows下防止弹出黑框
+            kwargs = {}
+            if os.name == 'nt':
+                # CREATE_NO_WINDOW = 0x08000000
+                kwargs['creationflags'] = getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)
+            
             self.process = subprocess.Popen(
                 [engine_path],
                 stdin=subprocess.PIPE,
@@ -96,7 +102,8 @@ class UCIEngine(QObject):
                 stderr=subprocess.PIPE,
                 text=True,
                 bufsize=1,
-                cwd=working_dir
+                cwd=working_dir,
+                **kwargs
             )
         except (FileNotFoundError, PermissionError) as e:
             print(f"Failed to start engine: {e}")
